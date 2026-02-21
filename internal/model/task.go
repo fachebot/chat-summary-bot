@@ -52,12 +52,12 @@ func (m *TaskModel) GetOrCreateTask(ctx context.Context, chatID int64, startTime
 	return m.CreateTask(ctx, chatID, startTime, endTime, status)
 }
 
-// UpdateTaskStatus 更新任务状态
+// UpdateTaskStatus 更新任务状态（统一使用 UTC）
 func (m *TaskModel) UpdateTaskStatus(ctx context.Context, taskID int, status task.Status, errorMsg *string) error {
 	update := m.client.UpdateOneID(taskID).SetStatus(status)
 	
 	if status == task.StatusCompleted {
-		update.SetCompletedAt(time.Now())
+		update.SetCompletedAt(time.Now().UTC())
 	}
 	
 	if errorMsg != nil {

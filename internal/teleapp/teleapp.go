@@ -242,16 +242,16 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 				}
 			}
 
-			// 保存消息到数据库
-			msgData := &model.MessageData{
-				MessageID:      message.Id,
-				ChatID:         message.ChatId,
-				SenderID:       senderID,
-				SenderName:     senderName,
-				SenderUsername: senderUsername,
-				Text:           text.Text.Text,
-				SentAt:         time.Unix(int64(message.Date), 0),
-			}
+		// 保存消息到数据库（时间统一使用 UTC）
+		msgData := &model.MessageData{
+			MessageID:      message.Id,
+			ChatID:         message.ChatId,
+			SenderID:       senderID,
+			SenderName:     senderName,
+			SenderUsername: senderUsername,
+			Text:           text.Text.Text,
+			SentAt:         time.Unix(int64(message.Date), 0).UTC(),
+		}
 
 			_, err = app.svcCtx.MessageModel.Create(ctx, msgData)
 			if err != nil {

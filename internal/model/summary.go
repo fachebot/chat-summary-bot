@@ -45,9 +45,9 @@ func (m *SummaryModel) Create(ctx context.Context, data *SummaryData) (*ent.Summ
 	return create.Save(ctx)
 }
 
-// getByChatSenderAndDate 按群组、发送者、摘要日期（同一天）查询一条摘要
+// getByChatSenderAndDate 按群组、发送者、摘要日期（同一天）查询一条摘要（统一使用 UTC）
 func (m *SummaryModel) getByChatSenderAndDate(ctx context.Context, chatID, senderID int64, summaryDate time.Time) (*ent.Summary, error) {
-	startOfDay := time.Date(summaryDate.Year(), summaryDate.Month(), summaryDate.Day(), 0, 0, 0, 0, summaryDate.Location())
+	startOfDay := time.Date(summaryDate.Year(), summaryDate.Month(), summaryDate.Day(), 0, 0, 0, 0, time.UTC)
 	endOfDay := startOfDay.Add(24 * time.Hour)
 	return m.client.Query().
 		Where(
@@ -84,9 +84,9 @@ func (m *SummaryModel) CreateOrUpdate(ctx context.Context, data *SummaryData) (*
 	return m.Create(ctx, data)
 }
 
-// GetByDateAndChat 查询指定日期的摘要
+// GetByDateAndChat 查询指定日期的摘要（统一使用 UTC）
 func (m *SummaryModel) GetByDateAndChat(ctx context.Context, chatID int64, date time.Time) ([]*ent.Summary, error) {
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
 	return m.client.Query().

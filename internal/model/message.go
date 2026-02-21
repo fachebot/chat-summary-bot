@@ -42,9 +42,9 @@ func (m *MessageModel) Create(ctx context.Context, data *MessageData) (*ent.Mess
 	return create.Save(ctx)
 }
 
-// GetByDateAndChat 按日期和群聊查询消息
+// GetByDateAndChat 按日期和群聊查询消息（统一使用 UTC）
 func (m *MessageModel) GetByDateAndChat(ctx context.Context, chatID int64, date time.Time) ([]*ent.Message, error) {
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
 	return m.client.Query().
@@ -57,9 +57,9 @@ func (m *MessageModel) GetByDateAndChat(ctx context.Context, chatID int64, date 
 		All(ctx)
 }
 
-// GetSendersByDateAndChat 获取当日所有发言者（返回每个发送者的一条消息，用于获取发送者信息）
+// GetSendersByDateAndChat 获取当日所有发言者（返回每个发送者的一条消息，用于获取发送者信息）（统一使用 UTC）
 func (m *MessageModel) GetSendersByDateAndChat(ctx context.Context, chatID int64, date time.Time) ([]*ent.Message, error) {
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
 	// 获取所有消息，然后在应用层去重
@@ -132,9 +132,9 @@ func (m *MessageModel) GetSendersByDateRangeAndChat(ctx context.Context, chatID 
 	return result, nil
 }
 
-// GetBySenderDateAndChat 获取指定发送者在指定日期的所有消息
+// GetBySenderDateAndChat 获取指定发送者在指定日期的所有消息（统一使用 UTC）
 func (m *MessageModel) GetBySenderDateAndChat(ctx context.Context, chatID int64, senderID int64, date time.Time) ([]*ent.Message, error) {
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
 	return m.client.Query().
