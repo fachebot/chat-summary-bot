@@ -26,12 +26,14 @@ type llmSummarizer interface {
 type Summarizer struct {
 	llmClient    llmSummarizer
 	messageModel messageProvider
+	botUserID    int64
 }
 
-func NewSummarizer(llmClient *llm.Client, messageModel *model.MessageModel) *Summarizer {
+func NewSummarizer(llmClient *llm.Client, messageModel *model.MessageModel, botUserID int64) *Summarizer {
 	return &Summarizer{
 		llmClient:    llmClient,
 		messageModel: messageModel,
+		botUserID:    botUserID,
 	}
 }
 
@@ -55,6 +57,11 @@ func escapeHTML(text string) string {
 	return result
 }
 
+// isSummaryMessage 判断消息是否为机器人发送的总结消息
+func isSummaryMessage(text string) bool {
+	return strings.HasPrefix(text, "📊 群组总结")
+}
+
 // SummarizeRange 生成指定时间区间的群聊总结
 func (s *Summarizer) SummarizeRange(ctx context.Context, chatID int64, startTime, endTime time.Time) (*SummaryResult, error) {
 	startStr := startTime.Format("2006-01-02")
@@ -72,6 +79,22 @@ func (s *Summarizer) SummarizeRange(ctx context.Context, chatID int64, startTime
 	}
 
 	logger.Infof("[Summarizer] 找到 %d 条消息", len(messages))
+
+	// 过滤掉机器人自己发送的总结消息（通过消息内容特征判断）
+	filtered := make([]*ent.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.SenderID == s.botUserID && isSummaryMessage(msg.Text) {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	messages = filtered
+	logger.Infof("[Summarizer] 过滤机器人总结消息后剩余 %d 条消息", len(messages))
+
+	if len(messages) == 0 {
+		logger.Infof("[Summarizer] 过滤后无消息，跳过总结")
+		return nil, nil
+	}
 
 	// 转换为结构化消息数组；提交给 LLM 前将 message_id 转为链接用短 ID
 	chatMsgs := make([]llm.ChatMessage, len(messages))
