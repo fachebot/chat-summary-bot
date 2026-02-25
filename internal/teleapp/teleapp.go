@@ -242,16 +242,21 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 				}
 			}
 
-		// 保存消息到数据库（时间统一使用 UTC）
-		msgData := &model.MessageData{
-			MessageID:      message.Id,
-			ChatID:         message.ChatId,
-			SenderID:       senderID,
-			SenderName:     senderName,
-			SenderUsername: senderUsername,
-			Text:           text.Text.Text,
-			SentAt:         time.Unix(int64(message.Date), 0).UTC(),
-		}
+			// 保存消息到数据库（时间统一使用 UTC）
+			msgData := &model.MessageData{
+				MessageID:      message.Id,
+				ChatID:         message.ChatId,
+				SenderID:       senderID,
+				SenderName:     senderName,
+				SenderUsername: senderUsername,
+				Text:           text.Text.Text,
+				SentAt:         time.Unix(int64(message.Date), 0).UTC(),
+			}
+
+			if !app.shouldSaveMessage(message.ChatId) {
+				logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
+				continue
+			}
 
 			_, err = app.svcCtx.MessageModel.Create(ctx, msgData)
 			if err != nil {
@@ -262,4 +267,32 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 			logger.Debugf("[TeleApp] 保存消息: %s[%d] -> %s: %s", chat.Title, chat.Id, senderName, text.Text.Text)
 		}
 	}
+}
+
+// shouldSaveMessage 判断是否应该保存该群组的消息
+func (app *TeleApp) shouldSaveMessage(chatID int64) bool {
+	cfg := app.svcCtx.Config.Summary
+	whitelist := cfg.Whitelist
+	blacklist := cfg.Blacklist
+
+	// 白名单优先
+	if len(whitelist) > 0 {
+		for _, id := range whitelist {
+			if id == chatID {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 黑名单检查
+	if len(blacklist) > 0 {
+		for _, id := range blacklist {
+			if id == chatID {
+				return false
+			}
+		}
+	}
+
+	return true
 }

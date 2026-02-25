@@ -292,6 +292,9 @@ func (s *Scheduler) executeDailySummaryForRange(ctx context.Context, startTime, 
 		return fmt.Errorf("查询群组列表失败，已重试 %d 次: %w", retryTimes, err)
 	}
 
+	// 白名单/黑名单过滤
+	chatIDs = s.filterChatIDs(chatIDs)
+
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("任务已取消")
@@ -514,4 +517,47 @@ func (s *Scheduler) getChatTitle(chatID int64) string {
 		return ""
 	}
 	return chat.Title
+}
+
+// filterChatIDs 根据白名单/黑名单过滤群组ID
+func (s *Scheduler) filterChatIDs(chatIDs []int64) []int64 {
+	cfg := s.config
+	whitelist := cfg.Whitelist
+	blacklist := cfg.Blacklist
+
+	// 白名单优先
+	if len(whitelist) > 0 {
+		filtered := make([]int64, 0)
+		for _, id := range chatIDs {
+			for _, wid := range whitelist {
+				if id == wid {
+					filtered = append(filtered, id)
+					break
+				}
+			}
+		}
+		logger.Infof("[Scheduler] 白名单过滤: %d -> %d 个群组", len(chatIDs), len(filtered))
+		return filtered
+	}
+
+	// 黑名单过滤
+	if len(blacklist) > 0 {
+		filtered := make([]int64, 0)
+		for _, id := range chatIDs {
+			blocked := false
+			for _, bid := range blacklist {
+				if id == bid {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				filtered = append(filtered, id)
+			}
+		}
+		logger.Infof("[Scheduler] 黑名单过滤: %d -> %d 个群组", len(chatIDs), len(filtered))
+		return filtered
+	}
+
+	return chatIDs
 }
