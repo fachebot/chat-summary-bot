@@ -135,7 +135,7 @@ func TestFormatSummaryForDisplay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FormatSummaryForDisplay(tt.result, tt.chatID, tt.startDate, tt.endDate)
+			got := FormatSummaryForDisplay(tt.result, tt.chatID, "测试群组", tt.startDate, tt.endDate)
 			assert.Equal(t, tt.want, got)
 		})
 	}

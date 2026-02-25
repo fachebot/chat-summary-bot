@@ -135,9 +135,18 @@ func buildMessageLink(chatID int64, messageID int64) string {
 	return fmt.Sprintf("https://t.me/c/%d/%d", channelID, messageID)
 }
 
+// buildGroupLink 构造 Telegram 超级群组链接
+func buildGroupLink(chatID int64) string {
+	channelID := -chatID - 1000000000000
+	if channelID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://t.me/c/%d", channelID)
+}
+
 // FormatSummaryForDisplay 将 SummaryResult 格式化为目标样式的 HTML 文本
 // 使用 Telegram HTML 语法：<b>粗体</b>、<a href="url">link</a>
-func FormatSummaryForDisplay(result *SummaryResult, chatID int64, startDate, endDate string) string {
+func FormatSummaryForDisplay(result *SummaryResult, chatID int64, chatTitle, startDate, endDate string) string {
 	if result == nil || len(result.Topics) == 0 {
 		return ""
 	}
@@ -146,6 +155,11 @@ func FormatSummaryForDisplay(result *SummaryResult, chatID int64, startDate, end
 
 	// 头部
 	sb.WriteString("📊 <b>群组总结</b>\n")
+	if groupLink := buildGroupLink(chatID); groupLink != "" {
+		sb.WriteString(fmt.Sprintf("🏠 <a href=\"%s\">%s</a>\n", escapeHTML(groupLink), escapeHTML(chatTitle)))
+	} else {
+		sb.WriteString(fmt.Sprintf("🏠 %s\n", escapeHTML(chatTitle)))
+	}
 	sb.WriteString(fmt.Sprintf("📅 %s 至 %s (UTC)\n", escapeHTML(startDate), escapeHTML(endDate)))
 
 	// 话题列表（用户内容需 HTML 转义）

@@ -75,6 +75,7 @@ func main() {
 	schedulerInstance := scheduler.NewScheduler(
 		summarizerInstance,
 		notifierInstance,
+		app.Client(),
 		svcCtx.MessageModel,
 		svcCtx.TaskModel,
 		svcCtx.DailyRunModel,

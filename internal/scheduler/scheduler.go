@@ -15,12 +15,14 @@ import (
 	"github.com/fachebot/talk-trace-bot/internal/notify"
 	"github.com/fachebot/talk-trace-bot/internal/summarizer"
 	"github.com/robfig/cron/v3"
+	"github.com/zelenin/go-tdlib/client"
 )
 
 type Scheduler struct {
 	cron          *cron.Cron
 	summarizer    *summarizer.Summarizer
 	notifier      *notify.Notifier
+	tdClient      *client.Client
 	messageModel  *model.MessageModel
 	taskModel     *model.TaskModel
 	dailyRunModel *model.DailyRunModel
@@ -36,6 +38,7 @@ var locUTC = time.UTC
 func NewScheduler(
 	summarizer *summarizer.Summarizer,
 	notifier *notify.Notifier,
+	tdClient *client.Client,
 	messageModel *model.MessageModel,
 	taskModel *model.TaskModel,
 	dailyRunModel *model.DailyRunModel,
@@ -45,6 +48,7 @@ func NewScheduler(
 		cron:          cron.New(cron.WithLocation(locUTC)),
 		summarizer:    summarizer,
 		notifier:      notifier,
+		tdClient:      tdClient,
 		messageModel:  messageModel,
 		taskModel:     taskModel,
 		dailyRunModel: dailyRunModel,
@@ -406,7 +410,8 @@ func (s *Scheduler) generateSummaryForTask(ctx context.Context, chatID int64, st
 		return "", nil
 	}
 
-	summary = summarizer.FormatSummaryForDisplay(result, chatID, startDate, endDate)
+	chatTitle := s.getChatTitle(chatID)
+	summary = summarizer.FormatSummaryForDisplay(result, chatID, chatTitle, startDate, endDate)
 	if summary == "" {
 		logger.Infof("[Scheduler] 群组 %d: 总结内容为空，跳过通知", chatID)
 		return "", nil
@@ -496,4 +501,17 @@ func (s *Scheduler) cleanupMessages(ctx context.Context) {
 	} else {
 		logger.Infof("[Scheduler] 已清理 %d 条消息", deleted)
 	}
+}
+
+// getChatTitle 获取群组名称
+func (s *Scheduler) getChatTitle(chatID int64) string {
+	if s.tdClient == nil {
+		return ""
+	}
+	chat, err := s.tdClient.GetChat(&client.GetChatRequest{ChatId: chatID})
+	if err != nil {
+		logger.Warnf("[Scheduler] 获取群组信息失败: %v", err)
+		return ""
+	}
+	return chat.Title
 }
