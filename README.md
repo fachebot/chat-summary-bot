@@ -115,11 +115,16 @@ cp etc/config.yaml.sample etc/config.yaml
 
 - `Cron`: Cron 表达式，定义总结执行时间（如 `"0 23 * * *"` 表示每天 23:00）
 - `RetentionDays`: 消息保留天数
+- `RangeDays`: 总结天数，1=仅昨天，7=最近7天
 - `NotifyMode`: 通知模式
   - `private`: 仅私信通知
   - `group`: 仅群内通知
   - `both`: 两者都通知
 - `NotifyUserIds`: 私信通知的目标用户 ID 列表
+- `Whitelist`: 白名单群组 ID 列表，设置后只保存和总结白名单群组（与黑名单互斥，优先使用白名单）
+- `Blacklist`: 黑名单群组 ID 列表，设置后不保存和总结黑名单群组（白名单为空时生效）
+
+> ⚠️ 白名单和黑名单互斥，优先使用白名单。设置白名单后只处理白名单中的群组；白名单为空时使用黑名单过滤。
 
 ## 工作流程
 
