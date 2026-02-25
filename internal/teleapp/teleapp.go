@@ -253,7 +253,7 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 				SentAt:         time.Unix(int64(message.Date), 0).UTC(),
 			}
 
-			if !app.shouldSaveMessage(message.ChatId) {
+			if !app.svcCtx.Config.Summary.ShouldSaveMessage(message.ChatId) {
 				logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
 				continue
 			}
@@ -267,32 +267,4 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 			logger.Debugf("[TeleApp] 保存消息: %s[%d] -> %s: %s", chat.Title, chat.Id, senderName, text.Text.Text)
 		}
 	}
-}
-
-// shouldSaveMessage 判断是否应该保存该群组的消息
-func (app *TeleApp) shouldSaveMessage(chatID int64) bool {
-	cfg := app.svcCtx.Config.Summary
-	whitelist := cfg.Whitelist
-	blacklist := cfg.Blacklist
-
-	// 白名单优先
-	if len(whitelist) > 0 {
-		for _, id := range whitelist {
-			if id == chatID {
-				return true
-			}
-		}
-		return false
-	}
-
-	// 黑名单检查
-	if len(blacklist) > 0 {
-		for _, id := range blacklist {
-			if id == chatID {
-				return false
-			}
-		}
-	}
-
-	return true
 }

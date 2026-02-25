@@ -112,6 +112,76 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("Summary.NotifyUserIds 不能为空（当 NotifyMode 为 'private' 或 'both' 时）")
 		}
 	}
+	if len(c.Summary.Whitelist) > 0 && len(c.Summary.Blacklist) > 0 {
+		return fmt.Errorf("Whitelist 和 Blacklist 不能同时设置")
+	}
 
 	return nil
+}
+
+// FilterChatIDs 根据白名单/黑名单过滤群组ID
+func (s *Summary) FilterChatIDs(chatIDs []int64) []int64 {
+	whitelist := s.Whitelist
+	blacklist := s.Blacklist
+
+	// 白名单优先
+	if len(whitelist) > 0 {
+		filtered := make([]int64, 0)
+		for _, id := range chatIDs {
+			for _, wid := range whitelist {
+				if id == wid {
+					filtered = append(filtered, id)
+					break
+				}
+			}
+		}
+		return filtered
+	}
+
+	// 黑名单过滤
+	if len(blacklist) > 0 {
+		filtered := make([]int64, 0)
+		for _, id := range chatIDs {
+			blocked := false
+			for _, bid := range blacklist {
+				if id == bid {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				filtered = append(filtered, id)
+			}
+		}
+		return filtered
+	}
+
+	return chatIDs
+}
+
+// ShouldSaveMessage 判断是否应该保存该群组的消息
+func (s *Summary) ShouldSaveMessage(chatID int64) bool {
+	whitelist := s.Whitelist
+	blacklist := s.Blacklist
+
+	// 白名单优先
+	if len(whitelist) > 0 {
+		for _, id := range whitelist {
+			if id == chatID {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 黑名单检查
+	if len(blacklist) > 0 {
+		for _, id := range blacklist {
+			if id == chatID {
+				return false
+			}
+		}
+	}
+
+	return true
 }
