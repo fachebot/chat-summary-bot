@@ -18,7 +18,7 @@ LLM:
 
 # 总结配置
 Summary:
-  Cron: "0 0 * * *" # cron 表达式，每天0点(北京时间)执行
+  Cron: "0 0 * * *" # cron 表达式，每天0点(UTC时间)执行
   RetentionDays: 7 # 消息保留天数
   RangeDays: 1 # 总结天数，1=仅昨天，7=最近7天
   NotifyMode: private # "private" / "group" / "both"
