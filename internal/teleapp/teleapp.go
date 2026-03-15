@@ -3,10 +3,12 @@ package teleapp
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fachebot/talk-trace-bot/internal/logger"
+	"github.com/fachebot/talk-trace-bot/internal/market_indicators"
 	"github.com/fachebot/talk-trace-bot/internal/model"
 	"github.com/fachebot/talk-trace-bot/internal/svc"
 
@@ -14,21 +16,22 @@ import (
 )
 
 type TeleApp struct {
-	svcCtx     *svc.ServiceContext
-	user       *client.User
-	tdClient   *client.Client
-	listener   *client.Listener
-	parameters *client.SetTdlibParametersRequest
-	usersMu    sync.RWMutex
-	usersCache map[int64]*client.User
-	chatsMu    sync.RWMutex
-	chatsCache map[int64]*client.Chat
-	ctx        context.Context
-	cancel     context.CancelFunc
-	ctxMu      sync.Mutex
+	svcCtx           *svc.ServiceContext
+	user             *client.User
+	tdClient         *client.Client
+	listener         *client.Listener
+	parameters       *client.SetTdlibParametersRequest
+	usersMu          sync.RWMutex
+	usersCache       map[int64]*client.User
+	chatsMu          sync.RWMutex
+	chatsCache       map[int64]*client.Chat
+	ctx              context.Context
+	cancel           context.CancelFunc
+	ctxMu            sync.Mutex
+	marketIndicators *market_indicators.MarketIndicators
 }
 
-func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string) *TeleApp {
+func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, marketIndicators *market_indicators.MarketIndicators) *TeleApp {
 	_, err := client.SetLogVerbosityLevel(&client.SetLogVerbosityLevelRequest{
 		NewVerbosityLevel: 1,
 	})
@@ -53,10 +56,11 @@ func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string) *T
 	}
 
 	app := &TeleApp{
-		svcCtx:     svcCtx,
-		parameters: parameters,
-		chatsCache: make(map[int64]*client.Chat),
-		usersCache: make(map[int64]*client.User),
+		svcCtx:           svcCtx,
+		parameters:       parameters,
+		chatsCache:       make(map[int64]*client.Chat),
+		usersCache:       make(map[int64]*client.User),
+		marketIndicators: marketIndicators,
 	}
 	return app
 }
@@ -180,6 +184,11 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 	ctx := app.ctx
 	app.ctxMu.Unlock()
 
+	botUsername := ""
+	if app.user != nil && app.user.Usernames != nil && len(app.user.Usernames.ActiveUsernames) > 0 {
+		botUsername = strings.ToLower(app.user.Usernames.ActiveUsernames[0])
+	}
+
 	for listener.IsActive() {
 		select {
 		case <-ctx.Done():
@@ -190,9 +199,9 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 				continue
 			}
 
-			// 仅处理文本消息
 			updateNewMessage := update.(*client.UpdateNewMessage)
 			message := updateNewMessage.Message
+
 			if message.Content.MessageContentType() != "messageText" {
 				continue
 			}
@@ -202,25 +211,30 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 				continue
 			}
 
-			// 获取来源Chat信息
+			messageText := text.Text.Text
+
+			logger.Debugf("[TeleApp] 接收消息: %s(%d) -> %s", messageText, message.Id)
+
+			isPrivateChat := false
+			isGroupChat := false
+
 			chat, err := app.getChat(message.ChatId)
 			if err != nil {
 				logger.Warnf("[TeleApp] 获取聊天信息失败, id: %d, %v", message.ChatId, err)
 				continue
 			}
 
-			logger.Debugf("[TeleApp] 接收消息: %s[%d] -> %s(%d)", chat.Title, chat.Id, text.Text.Text, message.Id)
-
-			// 过滤私聊和密聊
 			switch chat.Type.ChatTypeType() {
 			case client.TypeChatTypePrivate, client.TypeChatTypeSecret:
+				isPrivateChat = true
+			case client.TypeChatTypeBasicGroup, client.TypeChatTypeSupergroup:
+				isGroupChat = true
+			default:
 				continue
 			}
 
-			// 获取发送者信息
 			senderID := int64(0)
 			var senderName string
-			var senderUsername *string
 
 			if message.SenderId != nil {
 				switch sender := message.SenderId.(type) {
@@ -229,42 +243,117 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 					user, err := app.getUser(sender.UserId)
 					if err != nil {
 						logger.Warnf("[TeleApp] 获取用户信息失败, id: %d, %v", sender.UserId, err)
-						continue
-					}
-					senderName = user.FirstName
-					if user.LastName != "" {
-						senderName += " " + user.LastName
-					}
-					if user.Usernames != nil && len(user.Usernames.ActiveUsernames) > 0 {
-						username := "@" + user.Usernames.ActiveUsernames[0]
-						senderUsername = &username
+					} else {
+						senderName = user.FirstName
+						if user.LastName != "" {
+							senderName += " " + user.LastName
+						}
 					}
 				}
 			}
 
-			// 保存消息到数据库（时间统一使用 UTC）
-			msgData := &model.MessageData{
-				MessageID:      message.Id,
-				ChatID:         message.ChatId,
-				SenderID:       senderID,
-				SenderName:     senderName,
-				SenderUsername: senderUsername,
-				Text:           text.Text.Text,
-				SentAt:         time.Unix(int64(message.Date), 0).UTC(),
+			shouldRespond := false
+			if senderID != app.user.Id {
+				if isPrivateChat {
+					if strings.Contains(messageText, "抄底") {
+						shouldRespond = true
+					}
+				} else if isGroupChat && botUsername != "" {
+					mentionPattern := "@" + botUsername
+					if strings.Contains(strings.ToLower(messageText), mentionPattern) {
+						if strings.Contains(messageText, "抄底") {
+							shouldRespond = true
+						}
+					}
+				}
 			}
 
-			if !app.svcCtx.Config.Summary.ShouldSaveMessage(message.ChatId) {
-				logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
-				continue
+			if shouldRespond && app.marketIndicators != nil {
+				indicatorText := app.marketIndicators.GetFormattedText()
+				err := app.sendMessage(ctx, message.ChatId, message.Id, indicatorText, &client.TextParseModeHTML{})
+				if err != nil {
+					logger.Errorf("[TeleApp] 发送抄底指标失败: %v", err)
+				} else {
+					logger.Infof("[TeleApp] 已发送抄底指标到 %s", chat.Title)
+				}
 			}
 
-			_, err = app.svcCtx.MessageModel.Create(ctx, msgData)
-			if err != nil {
-				logger.Errorf("[TeleApp] 保存消息失败, %v", err)
-				continue
-			}
+			if isGroupChat {
+				if !app.svcCtx.Config.Summary.ShouldSaveMessage(message.ChatId) {
+					logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
+					continue
+				}
 
-			logger.Debugf("[TeleApp] 保存消息: %s[%d] -> %s: %s", chat.Title, chat.Id, senderName, text.Text.Text)
+				var senderUsername *string
+				if message.SenderId != nil {
+					if sender, ok := message.SenderId.(*client.MessageSenderUser); ok {
+						user, err := app.getUser(sender.UserId)
+						if err == nil && user.Usernames != nil && len(user.Usernames.ActiveUsernames) > 0 {
+							username := "@" + user.Usernames.ActiveUsernames[0]
+							senderUsername = &username
+						}
+					}
+				}
+
+				msgData := &model.MessageData{
+					MessageID:      message.Id,
+					ChatID:         message.ChatId,
+					SenderID:       senderID,
+					SenderName:     senderName,
+					SenderUsername: senderUsername,
+					Text:           messageText,
+					SentAt:         time.Unix(int64(message.Date), 0).UTC(),
+				}
+
+				_, err = app.svcCtx.MessageModel.Create(ctx, msgData)
+				if err != nil {
+					logger.Errorf("[TeleApp] 保存消息失败, %v", err)
+					continue
+				}
+
+				logger.Debugf("[TeleApp] 保存消息: %s[%d] -> %s: %s", chat.Title, chat.Id, senderName, messageText)
+			}
 		}
 	}
+}
+
+func (app *TeleApp) sendMessage(ctx context.Context, chatID int64, replyToMessageID int64, content string, parseMode ...client.TextParseMode) error {
+	if content == "" {
+		return nil
+	}
+
+	var err error
+	var formattedText *client.FormattedText
+	if len(parseMode) == 0 {
+		formattedText = &client.FormattedText{
+			Text: content,
+		}
+	} else {
+		formattedText, err = client.ParseTextEntities(&client.ParseTextEntitiesRequest{
+			Text:      content,
+			ParseMode: parseMode[0],
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	req := &client.SendMessageRequest{
+		ChatId: chatID,
+		InputMessageContent: &client.InputMessageText{
+			Text: formattedText,
+			LinkPreviewOptions: &client.LinkPreviewOptions{
+				IsDisabled: true,
+			},
+		},
+	}
+
+	if replyToMessageID > 0 {
+		req.ReplyTo = &client.InputMessageReplyToMessage{
+			MessageId: replyToMessageID,
+		}
+	}
+
+	_, err = app.tdClient.SendMessage(req)
+	return err
 }

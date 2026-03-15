@@ -11,6 +11,7 @@ import (
 
 	"github.com/fachebot/talk-trace-bot/internal/config"
 	"github.com/fachebot/talk-trace-bot/internal/logger"
+	"github.com/fachebot/talk-trace-bot/internal/market_indicators"
 	"github.com/fachebot/talk-trace-bot/internal/notify"
 	"github.com/fachebot/talk-trace-bot/internal/scheduler"
 	"github.com/fachebot/talk-trace-bot/internal/summarizer"
@@ -42,6 +43,9 @@ func main() {
 	// 创建服务上下文
 	svcCtx := svc.NewServiceContext(c)
 
+	// 创建市场指标
+	marketIndicators := market_indicators.New(svcCtx)
+
 	// 运行Telegram App
 	options := make([]client.Option, 0)
 	if c.Sock5Proxy.Enable {
@@ -54,12 +58,15 @@ func main() {
 	}
 
 	// 创建TeleApp
-	app := teleapp.NewApp(svcCtx, c.TelegramApp.ApiId, c.TelegramApp.ApiHash, "data")
+	app := teleapp.NewApp(svcCtx, c.TelegramApp.ApiId, c.TelegramApp.ApiHash, "data", marketIndicators)
 	user, err := app.Login(options...)
 	if err != nil {
 		logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
 	}
 	logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
+
+	// 运行市场指标
+	marketIndicators.Start()
 
 	// 创建总结器和通知器
 	summarizerInstance := summarizer.NewSummarizer(
@@ -97,6 +104,7 @@ func main() {
 	if err != nil {
 		logger.Infof("[TeleApp] 关闭失败, %v", err)
 	}
+	marketIndicators.Stop()
 	svcCtx.Close()
 	logger.Infof("服务已停止")
 }

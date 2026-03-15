@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/fachebot/talk-trace-bot/internal/coinank"
 	"github.com/fachebot/talk-trace-bot/internal/config"
 	"github.com/fachebot/talk-trace-bot/internal/ent"
 	"github.com/fachebot/talk-trace-bot/internal/llm"
 	"github.com/fachebot/talk-trace-bot/internal/logger"
 	"github.com/fachebot/talk-trace-bot/internal/model"
+	"github.com/fachebot/talk-trace-bot/internal/pi_cycle"
 
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/net/proxy"
@@ -25,6 +27,8 @@ type ServiceContext struct {
 	TaskModel      *model.TaskModel
 	DailyRunModel  *model.DailyRunModel
 	LLMClient      *llm.Client
+	PiCycleClient  *pi_cycle.Client
+	CoinankClient  *coinank.Client
 }
 
 func NewServiceContext(c *config.Config) *ServiceContext {
@@ -52,6 +56,16 @@ func NewServiceContext(c *config.Config) *ServiceContext {
 		}
 	}
 
+	piCycleClient, err := pi_cycle.NewClient(c.Sock5Proxy)
+	if err != nil {
+		logger.Fatalf("创建PiCycle客户端失败, %v", err)
+	}
+
+	coinankClient, err := coinank.NewClient(c.Sock5Proxy)
+	if err != nil {
+		logger.Fatalf("创建Coinank客户端失败, %v", err)
+	}
+
 	svcCtx := &ServiceContext{
 		Config:         c,
 		DbClient:       client,
@@ -61,6 +75,8 @@ func NewServiceContext(c *config.Config) *ServiceContext {
 		TaskModel:      model.NewTaskModel(client.Task),
 		DailyRunModel:  model.NewDailyRunModel(client.DailyRun),
 		LLMClient:      llm.NewClient(&c.LLM),
+		PiCycleClient:  piCycleClient,
+		CoinankClient:  coinankClient,
 	}
 	return svcCtx
 }
