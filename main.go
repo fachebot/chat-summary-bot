@@ -87,6 +87,8 @@ func main() {
 		svcCtx.TaskModel,
 		svcCtx.DailyRunModel,
 		&c.Summary,
+		marketIndicators,
+		&c.MarketIndicator,
 	)
 	if err := schedulerInstance.Start(); err != nil {
 		logger.Fatalf("[Scheduler] 启动调度器失败: %s", err)

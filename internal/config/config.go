@@ -37,11 +37,19 @@ type Summary struct {
 	Blacklist     []int64 `yaml:"Blacklist"`     // 黑名单群组ID列表，设置后不保存和总结黑名单群组
 }
 
+type MarketIndicator struct {
+	Enable    bool    `yaml:"Enable"`    // 是否启用指标广播
+	Cron      string  `yaml:"Cron"`      // cron 表达式，如 "0 1 * * *"
+	Whitelist []int64 `yaml:"Whitelist"` // 白名单群组ID列表
+	Blacklist []int64 `yaml:"Blacklist"` // 黑名单群组ID列表
+}
+
 type Config struct {
-	Sock5Proxy  Sock5Proxy  `yaml:"Sock5Proxy"`
-	TelegramApp TelegramApp `yaml:"TelegramApp"`
-	LLM         LLM         `yaml:"LLM"`
-	Summary     Summary     `yaml:"Summary"`
+	Sock5Proxy      Sock5Proxy      `yaml:"Sock5Proxy"`
+	TelegramApp     TelegramApp     `yaml:"TelegramApp"`
+	LLM             LLM             `yaml:"LLM"`
+	Summary         Summary         `yaml:"Summary"`
+	MarketIndicator MarketIndicator `yaml:"MarketIndicator"`
 }
 
 func LoadFromFile(filename string) (*Config, error) {
@@ -184,4 +192,42 @@ func (s *Summary) ShouldSaveMessage(chatID int64) bool {
 	}
 
 	return true
+}
+
+// FilterChatIDs 根据白名单/黑名单过滤群组ID
+func (m *MarketIndicator) FilterChatIDs(chatIDs []int64) []int64 {
+	whitelist := m.Whitelist
+	blacklist := m.Blacklist
+
+	if len(whitelist) > 0 {
+		filtered := make([]int64, 0)
+		for _, id := range chatIDs {
+			for _, wid := range whitelist {
+				if id == wid {
+					filtered = append(filtered, id)
+					break
+				}
+			}
+		}
+		return filtered
+	}
+
+	if len(blacklist) > 0 {
+		filtered := make([]int64, 0)
+		for _, id := range chatIDs {
+			blocked := false
+			for _, bid := range blacklist {
+				if id == bid {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				filtered = append(filtered, id)
+			}
+		}
+		return filtered
+	}
+
+	return chatIDs
 }

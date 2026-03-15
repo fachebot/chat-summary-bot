@@ -11,6 +11,7 @@ import (
 	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
 	"github.com/fachebot/talk-trace-bot/internal/ent/task"
 	"github.com/fachebot/talk-trace-bot/internal/logger"
+	"github.com/fachebot/talk-trace-bot/internal/market_indicators"
 	"github.com/fachebot/talk-trace-bot/internal/model"
 	"github.com/fachebot/talk-trace-bot/internal/notify"
 	"github.com/fachebot/talk-trace-bot/internal/summarizer"
@@ -19,17 +20,19 @@ import (
 )
 
 type Scheduler struct {
-	cron          *cron.Cron
-	summarizer    *summarizer.Summarizer
-	notifier      *notify.Notifier
-	tdClient      *client.Client
-	messageModel  *model.MessageModel
-	taskModel     *model.TaskModel
-	dailyRunModel *model.DailyRunModel
-	config        *config.Summary
-	ctx           context.Context
-	cancel        context.CancelFunc
-	mu            sync.Mutex
+	cron                  *cron.Cron
+	summarizer            *summarizer.Summarizer
+	notifier              *notify.Notifier
+	tdClient              *client.Client
+	messageModel          *model.MessageModel
+	taskModel             *model.TaskModel
+	dailyRunModel         *model.DailyRunModel
+	config                *config.Summary
+	marketIndicators      *market_indicators.MarketIndicators
+	marketIndicatorConfig *config.MarketIndicator
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	mu                    sync.Mutex
 }
 
 // locUTC UTC 标准时间（UTC）
@@ -43,16 +46,20 @@ func NewScheduler(
 	taskModel *model.TaskModel,
 	dailyRunModel *model.DailyRunModel,
 	cfg *config.Summary,
+	marketIndicators *market_indicators.MarketIndicators,
+	marketIndicatorConfig *config.MarketIndicator,
 ) *Scheduler {
 	return &Scheduler{
-		cron:          cron.New(cron.WithLocation(locUTC)),
-		summarizer:    summarizer,
-		notifier:      notifier,
-		tdClient:      tdClient,
-		messageModel:  messageModel,
-		taskModel:     taskModel,
-		dailyRunModel: dailyRunModel,
-		config:        cfg,
+		cron:                  cron.New(cron.WithLocation(locUTC)),
+		summarizer:            summarizer,
+		notifier:              notifier,
+		tdClient:              tdClient,
+		messageModel:          messageModel,
+		taskModel:             taskModel,
+		dailyRunModel:         dailyRunModel,
+		config:                cfg,
+		marketIndicators:      marketIndicators,
+		marketIndicatorConfig: marketIndicatorConfig,
 	}
 }
 
@@ -66,6 +73,15 @@ func (s *Scheduler) Start() error {
 	_, err := s.cron.AddFunc(s.config.Cron, s.runDailySummary)
 	if err != nil {
 		return fmt.Errorf("注册每日总结任务失败: %w", err)
+	}
+
+	// 注册市场指标广播任务
+	if s.marketIndicatorConfig != nil && s.marketIndicatorConfig.Enable {
+		_, err = s.cron.AddFunc(s.marketIndicatorConfig.Cron, s.runMarketIndicatorBroadcast)
+		if err != nil {
+			return fmt.Errorf("注册市场指标广播任务失败: %w", err)
+		}
+		logger.Infof("[Scheduler] 市场指标广播任务已注册: %s", s.marketIndicatorConfig.Cron)
 	}
 
 	s.cron.Start()
@@ -523,4 +539,101 @@ func (s *Scheduler) getChatTitle(chatID int64) string {
 		return ""
 	}
 	return chat.Title
+}
+
+// runMarketIndicatorBroadcast 执行市场指标广播任务
+func (s *Scheduler) runMarketIndicatorBroadcast() {
+	s.mu.Lock()
+	ctx := s.ctx
+	s.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		logger.Infof("[Scheduler] 市场指标广播任务已取消")
+		return
+	default:
+	}
+
+	if s.marketIndicators == nil {
+		logger.Warnf("[Scheduler] marketIndicators 未初始化")
+		return
+	}
+
+	logger.Infof("[Scheduler] 开始执行市场指标广播任务")
+
+	// 获取指标文本
+	indicatorText := s.marketIndicators.GetFormattedText()
+	if indicatorText == "" {
+		logger.Warnf("[Scheduler] 获取指标文本为空")
+		return
+	}
+
+	// 获取已加入的群组列表
+	chats, err := s.tdClient.GetChats(&client.GetChatsRequest{Limit: 100})
+	if err != nil {
+		logger.Errorf("[Scheduler] 获取群组列表失败: %v", err)
+		return
+	}
+
+	if len(chats.ChatIds) == 0 {
+		logger.Infof("[Scheduler] 未找到已加入的群组")
+		return
+	}
+
+	// 过滤群组
+	chatIDs := s.marketIndicatorConfig.FilterChatIDs(chats.ChatIds)
+	if len(chatIDs) == 0 {
+		logger.Infof("[Scheduler] 白名单/黑名单过滤后无群组")
+		return
+	}
+
+	logger.Infof("[Scheduler] 开始向 %d 个群组发送指标", len(chatIDs))
+
+	// 解析 HTML 文本
+	formatted := s.parseHTMLText(indicatorText)
+
+	// 向每个群组发送指标
+	successCount := 0
+	failCount := 0
+	for _, chatID := range chatIDs {
+		select {
+		case <-ctx.Done():
+			logger.Infof("[Scheduler] 市场指标广播任务已取消")
+			return
+		default:
+		}
+
+		_, err := s.tdClient.SendMessage(&client.SendMessageRequest{
+			ChatId: chatID,
+			InputMessageContent: &client.InputMessageText{
+				Text: formatted,
+			},
+		})
+		if err != nil {
+			logger.Warnf("[Scheduler] 发送指标到群组 %d 失败: %v", chatID, err)
+			failCount++
+			continue
+		}
+		successCount++
+		logger.Infof("[Scheduler] 已发送指标到群组 %d", chatID)
+	}
+
+	logger.Infof("[Scheduler] 市场指标广播完成: 成功 %d 个，失败 %d 个", successCount, failCount)
+}
+
+// parseHTMLText 使用 TDLib 的 HTML 解析能力
+func (s *Scheduler) parseHTMLText(text string) *client.FormattedText {
+	if text == "" {
+		return &client.FormattedText{Text: text}
+	}
+
+	formatted, err := client.ParseTextEntities(&client.ParseTextEntitiesRequest{
+		Text:      text,
+		ParseMode: &client.TextParseModeHTML{},
+	})
+	if err != nil {
+		logger.Warnf("[Scheduler] 解析 HTML 文本失败，回退为纯文本发送: %v", err)
+		return &client.FormattedText{Text: text}
+	}
+	return formatted
 }
