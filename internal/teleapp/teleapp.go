@@ -258,8 +258,11 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 					if strings.Contains(messageText, "抄底") {
 						shouldRespond = true
 					}
-				} else if isGroupChat && botUsername != "" {
-					mentionPattern := "@" + botUsername
+				} else if isGroupChat {
+					mentionPattern := app.user.FirstName
+					if botUsername != "" {
+						mentionPattern = "@" + botUsername
+					}
 					if strings.Contains(strings.ToLower(messageText), mentionPattern) {
 						if strings.Contains(messageText, "抄底") {
 							shouldRespond = true
