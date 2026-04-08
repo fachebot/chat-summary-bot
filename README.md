@@ -2,6 +2,9 @@
 
 Telegram 群聊消息摘要 Bot - 使用你的账号，自动记录群聊并生成 AI 摘要
 
+<img width="663" height="1010" alt="image" src="https://github.com/user-attachments/assets/110748f2-1cc5-4f04-8e7b-afb8027edcb3" />
+
+
 ## 特点
 
 - 🔓 **无审核加群**：使用你的 Telegram 账号，直接记录你已加入的群聊，无需群主审核
