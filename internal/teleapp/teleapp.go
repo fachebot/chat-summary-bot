@@ -259,6 +259,15 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 
 			shouldRespond := false
 			isSummaryCommand := false
+
+			// 私聊抄底
+			if senderID != app.user.Id && !isGroupChat {
+				if strings.Contains(messageText, "抄底") {
+					shouldRespond = true
+				}
+			}
+
+			// 群聊处理（/summary 命令 + 抄底 mention）
 			if senderID != app.user.Id && isGroupChat {
 				mentionPattern := app.user.FirstName
 				if botUsername != "" {
