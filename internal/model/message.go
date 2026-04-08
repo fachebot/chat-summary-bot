@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
 )
 
 type MessageModel struct {

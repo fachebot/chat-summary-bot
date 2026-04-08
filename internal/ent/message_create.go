@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
 )
 
 // MessageCreate is the builder for creating a Message entity.

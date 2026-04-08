@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/fachebot/talk-trace-bot/internal/ent/task"
+	"github.com/fachebot/chat-summary-bot/internal/ent/task"
 )
 
 // TaskCreate is the builder for creating a Task entity.

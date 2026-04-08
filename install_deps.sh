@@ -1,9 +1,9 @@
 #!/bin/bash
-# Talk Trace Bot 依赖安装脚本 (WSL2/Ubuntu)
+# Chat Summary Bot 依赖安装脚本 (WSL2/Ubuntu)
 
 set -e
 
-echo "🚀 开始安装 Talk Trace Bot 依赖..."
+echo "🚀 开始安装 Chat Summary Bot 依赖..."
 
 # 检查是否为 root
 if [ "$EUID" -eq 0 ]; then 
@@ -77,4 +77,4 @@ echo ""
 echo "下一步："
 echo "  1. 运行编译脚本: ./build.sh"
 echo "  2. 配置 config.yaml: cp etc/config.yaml.sample etc/config.yaml"
-echo "  3. 运行 Bot: ./talk-trace-bot -f etc/config.yaml"
+echo "  3. 运行 Bot: ./chat-summary-bot -f etc/config.yaml"

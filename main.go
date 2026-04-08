@@ -9,14 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/fachebot/talk-trace-bot/internal/config"
-	"github.com/fachebot/talk-trace-bot/internal/logger"
-	"github.com/fachebot/talk-trace-bot/internal/market_indicators"
-	"github.com/fachebot/talk-trace-bot/internal/notify"
-	"github.com/fachebot/talk-trace-bot/internal/scheduler"
-	"github.com/fachebot/talk-trace-bot/internal/summarizer"
-	"github.com/fachebot/talk-trace-bot/internal/svc"
-	"github.com/fachebot/talk-trace-bot/internal/teleapp"
+	"github.com/fachebot/chat-summary-bot/internal/config"
+	"github.com/fachebot/chat-summary-bot/internal/logger"
+	"github.com/fachebot/chat-summary-bot/internal/market_indicators"
+	"github.com/fachebot/chat-summary-bot/internal/notify"
+	"github.com/fachebot/chat-summary-bot/internal/scheduler"
+	"github.com/fachebot/chat-summary-bot/internal/summarizer"
+	"github.com/fachebot/chat-summary-bot/internal/svc"
+	"github.com/fachebot/chat-summary-bot/internal/teleapp"
 
 	"github.com/zelenin/go-tdlib/client"
 )

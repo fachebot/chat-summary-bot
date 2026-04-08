@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fachebot/talk-trace-bot/internal/config"
-	"github.com/fachebot/talk-trace-bot/internal/logger"
+	"github.com/fachebot/chat-summary-bot/internal/config"
+	"github.com/fachebot/chat-summary-bot/internal/logger"
 	"github.com/zelenin/go-tdlib/client"
 )
 

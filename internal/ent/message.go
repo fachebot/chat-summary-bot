@@ -9,7 +9,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
 )
 
 // Message is the model entity for the Message schema.

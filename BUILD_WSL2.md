@@ -79,7 +79,7 @@ pkg-config --modversion tdlib
 
 ```bash
 # 进入项目目录
-cd /mnt/d/Work/Trading/talk-trace-bot
+cd /mnt/d/Work/Trading/chat-summary-bot
 
 # 给脚本添加执行权限
 chmod +x build.sh
@@ -92,26 +92,26 @@ chmod +x build.sh
 
 ```bash
 # 进入项目目录
-cd /mnt/d/Work/Trading/talk-trace-bot
+cd /mnt/d/Work/Trading/chat-summary-bot
 
 # 下载依赖
 go mod download
 
 # 编译
-go build -o talk-trace-bot .
+go build -o chat-summary-bot .
 ```
 
 ## 验证编译结果
 
 ```bash
 # 检查可执行文件
-ls -lh talk-trace-bot
+ls -lh chat-summary-bot
 
 # 查看文件信息
-file talk-trace-bot
+file chat-summary-bot
 
 # 测试运行（需要先配置 config.yaml）
-./talk-trace-bot -f etc/config.yaml
+./chat-summary-bot -f etc/config.yaml
 ```
 
 ## 常见问题

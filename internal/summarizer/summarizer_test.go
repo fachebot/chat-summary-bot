@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent"
-	"github.com/fachebot/talk-trace-bot/internal/llm"
+	"github.com/fachebot/chat-summary-bot/internal/ent"
+	"github.com/fachebot/chat-summary-bot/internal/llm"
 	"github.com/stretchr/testify/assert"
 )
 

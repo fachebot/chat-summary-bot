@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
+	"github.com/fachebot/chat-summary-bot/internal/ent/dailyrun"
 )
 
 // DailyRunCreate is the builder for creating a DailyRun entity.

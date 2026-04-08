@@ -11,7 +11,7 @@ import (
 
 	"github.com/enetx/g"
 	"github.com/enetx/surf"
-	"github.com/fachebot/talk-trace-bot/internal/config"
+	"github.com/fachebot/chat-summary-bot/internal/config"
 	"github.com/shopspring/decimal"
 )
 

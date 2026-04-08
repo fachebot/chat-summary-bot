@@ -9,7 +9,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/fachebot/talk-trace-bot/internal/ent/summary"
+	"github.com/fachebot/chat-summary-bot/internal/ent/summary"
 )
 
 // Summary is the model entity for the Summary schema.

@@ -1,6 +1,6 @@
-# Talk Trace Bot
+# Chat Summary Bot
 
-Telegram 群聊消息总结 Bot - 自动保存群聊消息并生成每日 AI 总结
+Telegram 群聊消息摘要 Bot - 自动保存群聊消息并生成每日 AI 摘要
 
 ## 功能特性
 
@@ -71,7 +71,7 @@ chmod +x build.sh
 ./build.sh
 
 # 或手动编译
-go build -o talk-trace-bot .
+go build -o chat-summary-bot .
 ```
 
 ## 配置
@@ -91,7 +91,7 @@ cp etc/config.yaml.sample etc/config.yaml
 ## 运行
 
 ```bash
-./talk-trace-bot -f etc/config.yaml
+./chat-summary-bot -f etc/config.yaml
 ```
 
 ## 配置说明

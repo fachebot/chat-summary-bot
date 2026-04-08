@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/coinank"
-	"github.com/fachebot/talk-trace-bot/internal/logger"
-	"github.com/fachebot/talk-trace-bot/internal/pi_cycle"
-	"github.com/fachebot/talk-trace-bot/internal/svc"
+	"github.com/fachebot/chat-summary-bot/internal/coinank"
+	"github.com/fachebot/chat-summary-bot/internal/logger"
+	"github.com/fachebot/chat-summary-bot/internal/pi_cycle"
+	"github.com/fachebot/chat-summary-bot/internal/svc"
 	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
@@ -192,7 +192,7 @@ func (m *MarketIndicators) GetFormattedText() string {
 			sb.WriteString(fmt.Sprintf("  上次信号: <code>%s</code>\n", lo.If(signal.SignalType == pi_cycle.SignalTypeCrossUnder, "死叉").Else("金叉")))
 			sb.WriteString(fmt.Sprintf("  触发价格: <code>%s</code>\n", signal.Price.Truncate(2)))
 			sb.WriteString(fmt.Sprintf("  触发时间: <code>%s</code>\n", formatTime(signal.Time)))
-			sb.WriteString(fmt.Sprintf("  抄底条件: <code>死叉信号</code> %s\n", lo.If(signal.SignalType == pi_cycle.SignalTypeCrossUnder, "✅").Else("❌")))
+			sb.WriteString(fmt.Sprintf("  抄底条件: <code>死叉</code> %s\n", lo.If(signal.SignalType == pi_cycle.SignalTypeCrossUnder, "✅").Else("❌")))
 		}
 
 		sb.WriteString(fmt.Sprintf("  更新时间: <code>%s</code>\n\n", formatTime(kline.OpenTime)))

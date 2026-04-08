@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/fachebot/talk-trace-bot/internal/ent/predicate"
-	"github.com/fachebot/talk-trace-bot/internal/ent/task"
+	"github.com/fachebot/chat-summary-bot/internal/ent/predicate"
+	"github.com/fachebot/chat-summary-bot/internal/ent/task"
 )
 
 // TaskUpdate is the builder for updating Task entities.

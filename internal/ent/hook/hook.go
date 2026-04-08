@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent"
+	"github.com/fachebot/chat-summary-bot/internal/ent"
 )
 
 // The DailyRunFunc type is an adapter to allow the use of ordinary

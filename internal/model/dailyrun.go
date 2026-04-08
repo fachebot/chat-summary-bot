@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent"
-	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
+	"github.com/fachebot/chat-summary-bot/internal/ent"
+	"github.com/fachebot/chat-summary-bot/internal/ent/dailyrun"
 )
 
 type DailyRunModel struct {

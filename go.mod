@@ -1,4 +1,4 @@
-module github.com/fachebot/talk-trace-bot
+module github.com/fachebot/chat-summary-bot
 
 go 1.25.0
 

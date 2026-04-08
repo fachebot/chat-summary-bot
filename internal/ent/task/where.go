@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect/sql"
-	"github.com/fachebot/talk-trace-bot/internal/ent/predicate"
+	"github.com/fachebot/chat-summary-bot/internal/ent/predicate"
 )
 
 // ID filters vertices based on their ID field.

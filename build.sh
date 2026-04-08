@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Talk Trace Bot 编译脚本
+# Chat Summary Bot 编译脚本
 
 set -e
 
-echo "🚀 开始编译 Talk Trace Bot..."
+echo "🚀 开始编译 Chat Summary Bot..."
 
 # 检查 Go 环境
 if ! command -v go &> /dev/null; then
@@ -29,14 +29,14 @@ go mod download
 
 # 编译
 echo "🔨 编译中..."
-go build -o talk-trace-bot .
+go build -o chat-summary-bot .
 
-if [ -f "talk-trace-bot" ]; then
+if [ -f "chat-summary-bot" ]; then
     echo "✅ 编译成功！"
-    echo "📁 可执行文件: ./talk-trace-bot"
+    echo "📁 可执行文件: ./chat-summary-bot"
     echo ""
     echo "运行方式:"
-    echo "  ./talk-trace-bot -f etc/config.yaml"
+    echo "  ./chat-summary-bot -f etc/config.yaml"
 else
     echo "❌ 编译失败"
     exit 1

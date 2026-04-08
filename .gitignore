@@ -38,5 +38,5 @@ etc/*.yml
 etc/*.yaml
 
 # bin file
-talk-trace-bot
+chat-summary-bot
 __debug_bin.exe*

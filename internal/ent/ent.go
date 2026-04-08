@@ -12,10 +12,10 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
-	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
-	"github.com/fachebot/talk-trace-bot/internal/ent/summary"
-	"github.com/fachebot/talk-trace-bot/internal/ent/task"
+	"github.com/fachebot/chat-summary-bot/internal/ent/dailyrun"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent/summary"
+	"github.com/fachebot/chat-summary-bot/internal/ent/task"
 )
 
 // ent aliases to avoid import conflicts in user's code.

@@ -5,11 +5,11 @@ package ent
 import (
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
-	"github.com/fachebot/talk-trace-bot/internal/ent/schema"
-	"github.com/fachebot/talk-trace-bot/internal/ent/summary"
-	"github.com/fachebot/talk-trace-bot/internal/ent/task"
+	"github.com/fachebot/chat-summary-bot/internal/ent/dailyrun"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent/schema"
+	"github.com/fachebot/chat-summary-bot/internal/ent/summary"
+	"github.com/fachebot/chat-summary-bot/internal/ent/task"
 )
 
 // The init function reads all schema descriptors with runtime code

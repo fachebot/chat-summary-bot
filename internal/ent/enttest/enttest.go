@@ -5,12 +5,12 @@ package enttest
 import (
 	"context"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent"
+	"github.com/fachebot/chat-summary-bot/internal/ent"
 	// required by schema hooks.
-	_ "github.com/fachebot/talk-trace-bot/internal/ent/runtime"
+	_ "github.com/fachebot/chat-summary-bot/internal/ent/runtime"
 
 	"entgo.io/ent/dialect/sql/schema"
-	"github.com/fachebot/talk-trace-bot/internal/ent/migrate"
+	"github.com/fachebot/chat-summary-bot/internal/ent/migrate"
 )
 
 type (

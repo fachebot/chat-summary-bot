@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent"
-	"github.com/fachebot/talk-trace-bot/internal/llm"
-	"github.com/fachebot/talk-trace-bot/internal/logger"
-	"github.com/fachebot/talk-trace-bot/internal/model"
+	"github.com/fachebot/chat-summary-bot/internal/ent"
+	"github.com/fachebot/chat-summary-bot/internal/llm"
+	"github.com/fachebot/chat-summary-bot/internal/logger"
+	"github.com/fachebot/chat-summary-bot/internal/model"
 )
 
 // messageProvider 获取时间区间内的消息（便于测试注入 mock）

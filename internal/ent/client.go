@@ -9,15 +9,15 @@ import (
 	"log"
 	"reflect"
 
-	"github.com/fachebot/talk-trace-bot/internal/ent/migrate"
+	"github.com/fachebot/chat-summary-bot/internal/ent/migrate"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql"
-	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
-	"github.com/fachebot/talk-trace-bot/internal/ent/summary"
-	"github.com/fachebot/talk-trace-bot/internal/ent/task"
+	"github.com/fachebot/chat-summary-bot/internal/ent/dailyrun"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent/summary"
+	"github.com/fachebot/chat-summary-bot/internal/ent/task"
 )
 
 // Client is the client that holds all ent builders.

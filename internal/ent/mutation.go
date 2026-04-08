@@ -11,11 +11,11 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/fachebot/talk-trace-bot/internal/ent/dailyrun"
-	"github.com/fachebot/talk-trace-bot/internal/ent/message"
-	"github.com/fachebot/talk-trace-bot/internal/ent/predicate"
-	"github.com/fachebot/talk-trace-bot/internal/ent/summary"
-	"github.com/fachebot/talk-trace-bot/internal/ent/task"
+	"github.com/fachebot/chat-summary-bot/internal/ent/dailyrun"
+	"github.com/fachebot/chat-summary-bot/internal/ent/message"
+	"github.com/fachebot/chat-summary-bot/internal/ent/predicate"
+	"github.com/fachebot/chat-summary-bot/internal/ent/summary"
+	"github.com/fachebot/chat-summary-bot/internal/ent/task"
 )
 
 const (

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fachebot/talk-trace-bot/internal/logger"
-	"github.com/fachebot/talk-trace-bot/internal/market_indicators"
-	"github.com/fachebot/talk-trace-bot/internal/model"
-	"github.com/fachebot/talk-trace-bot/internal/svc"
+	"github.com/fachebot/chat-summary-bot/internal/logger"
+	"github.com/fachebot/chat-summary-bot/internal/market_indicators"
+	"github.com/fachebot/chat-summary-bot/internal/model"
+	"github.com/fachebot/chat-summary-bot/internal/svc"
 
 	"github.com/zelenin/go-tdlib/client"
 )

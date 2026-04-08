@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fachebot/talk-trace-bot/internal/config"
+	"github.com/fachebot/chat-summary-bot/internal/config"
 	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
