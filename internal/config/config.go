@@ -35,6 +35,7 @@ type Summary struct {
 	RetryInterval int     `yaml:"RetryInterval"` // 重试间隔（秒），默认 60
 	Whitelist     []int64 `yaml:"Whitelist"`     // 白名单群组ID列表，设置后只保存和总结白名单群组
 	Blacklist     []int64 `yaml:"Blacklist"`     // 黑名单群组ID列表，设置后不保存和总结黑名单群组
+	AdminUserIds  []int64 `yaml:"AdminUserIds"`  // 手动触发摘要的白名单用户ID列表
 }
 
 type MarketIndicator struct {

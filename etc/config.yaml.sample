@@ -30,10 +30,12 @@ Summary:
     # - -1001234567890
   Blacklist: # 黑名单群组ID列表，设置后不保存和总结黑名单群组（白名单为空时生效）
     # - -1001234567890
+  AdminUserIds: # 手动触发摘要的白名单用户ID列表，使用 /summary 命令
+    # - 7779208645
 
 # 市场指标广播配置
 MarketIndicator:
   Enable: true # 是否启用指标广播
   Cron: "0 1 * * *" # cron 表达式，每天 UTC 1点执行（北京时间 9点）
-  Whitelist: [] # 白名单群组ID列表，为空表示所有群组
-  Blacklist: [] # 黑名单群组ID列表
+  Whitelist: # 白名单群组ID列表，为空表示所有群组
+  Blacklist: # 黑名单群组ID列表

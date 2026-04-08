@@ -29,6 +29,8 @@ type TeleApp struct {
 	cancel           context.CancelFunc
 	ctxMu            sync.Mutex
 	marketIndicators *market_indicators.MarketIndicators
+	summaryHandler   func(ctx context.Context, chatID int64) error
+	adminUserIds     []int64
 }
 
 func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, marketIndicators *market_indicators.MarketIndicators) *TeleApp {
@@ -63,6 +65,11 @@ func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, ma
 		marketIndicators: marketIndicators,
 	}
 	return app
+}
+
+func (app *TeleApp) SetSummaryHandler(handler func(ctx context.Context, chatID int64) error, adminUserIds []int64) {
+	app.summaryHandler = handler
+	app.adminUserIds = adminUserIds
 }
 
 func (app *TeleApp) Login(options ...client.Option) (*client.User, error) {
@@ -215,7 +222,6 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 
 			logger.Debugf("[TeleApp] 接收消息: %s(%d) -> %s", messageText, message.Id)
 
-			isPrivateChat := false
 			isGroupChat := false
 
 			chat, err := app.getChat(message.ChatId)
@@ -226,7 +232,6 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 
 			switch chat.Type.ChatTypeType() {
 			case client.TypeChatTypePrivate, client.TypeChatTypeSecret:
-				isPrivateChat = true
 			case client.TypeChatTypeBasicGroup, client.TypeChatTypeSupergroup:
 				isGroupChat = true
 			default:
@@ -253,21 +258,43 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 			}
 
 			shouldRespond := false
-			if senderID != app.user.Id {
-				if isPrivateChat {
-					if strings.Contains(messageText, "抄底") {
-						shouldRespond = true
+			isSummaryCommand := false
+			if senderID != app.user.Id && isGroupChat {
+				mentionPattern := app.user.FirstName
+				if botUsername != "" {
+					mentionPattern = "@" + botUsername
+				}
+				hasMention := strings.Contains(strings.ToLower(messageText), mentionPattern)
+
+				trimmedText := strings.TrimSpace(messageText)
+				if hasMention {
+					trimmedText = strings.TrimPrefix(trimmedText, mentionPattern)
+					trimmedText = strings.TrimSpace(trimmedText)
+				}
+				if hasMention && strings.HasPrefix(trimmedText, "/summary") {
+					isSummaryCommand = true
+				}
+
+				if hasMention && strings.Contains(messageText, "抄底") {
+					shouldRespond = true
+				}
+			}
+
+			if isSummaryCommand && senderID != app.user.Id && app.summaryHandler != nil {
+				isAdmin := false
+				for _, adminID := range app.adminUserIds {
+					if senderID == adminID {
+						isAdmin = true
+						break
 					}
-				} else if isGroupChat {
-					mentionPattern := app.user.FirstName
-					if botUsername != "" {
-						mentionPattern = "@" + botUsername
+				}
+				if isAdmin {
+					logger.Infof("[TeleApp] 用户 %d 在群组 %d 请求手动摘要", senderID, message.ChatId)
+					if err := app.summaryHandler(ctx, message.ChatId); err != nil {
+						logger.Errorf("[TeleApp] 手动摘要失败: %v", err)
 					}
-					if strings.Contains(strings.ToLower(messageText), mentionPattern) {
-						if strings.Contains(messageText, "抄底") {
-							shouldRespond = true
-						}
-					}
+				} else {
+					logger.Warnf("[TeleApp] 用户 %d 不在白名单中，拒绝手动摘要请求", senderID)
 				}
 			}
 

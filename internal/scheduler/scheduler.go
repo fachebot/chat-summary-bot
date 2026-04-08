@@ -514,6 +514,25 @@ func (s *Scheduler) processTask(ctx context.Context, chatID int64, startTime, en
 	return nil
 }
 
+func (s *Scheduler) TriggerSummaryManual(ctx context.Context, chatID int64) error {
+	now := time.Now().In(locUTC)
+	endTime := now
+	startTime := now.Add(-24 * time.Hour)
+
+	dateRange := fmt.Sprintf("%s ~ %s", startTime.Format("2006-01-02"), endTime.AddDate(0, 0, -1).Format("2006-01-02"))
+	logger.Infof("[Scheduler] 手动触发摘要，chatID=%d，区间: %s", chatID, dateRange)
+
+	summary, err := s.generateSummaryForTask(ctx, chatID, startTime, endTime)
+	if err != nil {
+		return err
+	}
+	if summary == "" {
+		return nil
+	}
+
+	return s.notifier.Notify(ctx, summary, chatID)
+}
+
 // cleanupMessages 执行消息清理
 func (s *Scheduler) cleanupMessages(ctx context.Context) {
 	cutoffDate := time.Now().In(locUTC).AddDate(0, 0, -s.config.RetentionDays-1)

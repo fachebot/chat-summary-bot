@@ -94,6 +94,8 @@ func main() {
 		logger.Fatalf("[Scheduler] 启动调度器失败: %s", err)
 	}
 
+	app.SetSummaryHandler(schedulerInstance.TriggerSummaryManual, c.Summary.AdminUserIds)
+
 	// 等待程序退出
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
