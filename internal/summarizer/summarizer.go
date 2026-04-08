@@ -59,7 +59,7 @@ func escapeHTML(text string) string {
 
 // isSummaryMessage 判断消息是否为机器人发送的总结消息
 func isSummaryMessage(text string) bool {
-	return strings.HasPrefix(text, "📊 群组总结")
+	return strings.HasPrefix(text, "📊 群组总结") || strings.HasPrefix(text, "📊 BTC抄底指标")
 }
 
 // SummarizeRange 生成指定时间区间的群聊总结
