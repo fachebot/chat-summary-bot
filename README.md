@@ -64,7 +64,7 @@ Telegram 群聊消息摘要 Bot - 使用你的账号，自动记录群聊并生�
 ## 系统要求
 
 - Linux 系统（推荐使用 WSL2）
-- Go 1.24+ 
+- Go 1.24+
 - TDLib 库（Telegram 官方库）
 - SQLite3
 
@@ -160,6 +160,18 @@ cp etc/config.yaml.sample etc/config.yaml
 - `APIKey`: API 密钥
 - `Model`: 模型名称（如 `gpt-4o`, `deepseek-chat`, `qwen-plus`）
 - `MaxTokens`: 模型上下文窗口大小
+- `MaxOutputTokens`: 单次请求允许的最大输出 tokens，未设置时会按上下文窗口自动推导
+
+如果你使用支持超长上下文的模型，建议把输入窗口和输出窗口分开配置。例如 DeepSeek V4 可配置为：
+
+```yaml
+LLM:
+  BaseURL: https://api.deepseek.com/v1
+  APIKey: your-api-key-here
+  Model: deepseek-v4
+  MaxTokens: 1000000
+  MaxOutputTokens: 384000
+```
 
 ### Summary
 

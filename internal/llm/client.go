@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,223 +19,381 @@ type openAIClientInterface interface {
 }
 
 type Client struct {
-	config         *config.LLM
-	openaiClient   openAIClientInterface
-	maxInputTokens int
+	config          *config.LLM
+	openaiClient    openAIClientInterface
+	totalTokens     int
+	maxInputTokens  int
+	maxOutputTokens int
 }
+
+type topicsRequestSpec struct {
+	taskName          string
+	systemPrompt      string
+	userPrompt        string
+	allowedMessageIDs map[int64]struct{}
+	allowedSenders    map[string]struct{}
+}
+
+const (
+	defaultPromptReserveTokens = 2000
+	minimumChunkInputTokens    = 1000
+	minimumOutputTokens        = 1
+	maximumDefaultOutputTokens = 32000
+	tokenEstimateSafetyFactor  = 1.2
+	defaultLLMRetryAttempts    = 3
+	maxContextLimitShrinkRetry = 8
+	minimumMergeBatchTokens    = 2000
+	minimumTopicMatchScore     = 0.60
+	retryBackoffBase           = 200 * time.Millisecond
+)
+
+const jsonObjectFormatHint = `JSON 结构模板（必须严格遵守）：
+{
+	"topics": [
+		{
+			"title": "话题标题",
+			"items": [
+				{
+					"sender_name": "发言者名",
+					"description": "贡献总结",
+					"message_ids": [1234567890]
+				}
+			]
+		}
+	]
+}
+
+额外约束：
+1. topics 数组里的每个元素只能包含 title 和 items 两个字段
+2. 不要使用 topic 作为字段名；如果你想表达话题标题，字段名必须是 title
+3. sender_name、description、message_ids 只能出现在 items 数组的元素里，不能直接出现在 topics 数组元素里
+4. message_ids 必须是数字数组，不要写成字符串数组
+5. 即使某个话题只有一个发言者，也必须把该发言者放进 items 数组`
 
 func NewClient(cfg *config.LLM) *Client {
 	openaiConfig := openai.DefaultConfig(cfg.APIKey)
 	openaiConfig.BaseURL = cfg.BaseURL
+	maxInputTokens, maxOutputTokens := calculateTokenBudgets(cfg.MaxTokens, cfg.MaxOutputTokens)
 
 	client := &Client{
-		config:         cfg,
-		openaiClient:   openai.NewClientWithConfig(openaiConfig),
-		maxInputTokens: cfg.MaxTokens - 2000, // 预留 2000 tokens 给 system prompt 和输出
+		config:          cfg,
+		openaiClient:    openai.NewClientWithConfig(openaiConfig),
+		totalTokens:     cfg.MaxTokens,
+		maxInputTokens:  maxInputTokens,
+		maxOutputTokens: maxOutputTokens,
 	}
+
+	logger.Infof("[LLM] 初始化客户端: model=%s, context=%d, input_budget=%d, output_budget=%d", cfg.Model, cfg.MaxTokens, maxInputTokens, maxOutputTokens)
 
 	return client
 }
 
-// estimateTokens 估算文本的 token 数量
-func estimateTokens(text string) int {
-	// 简单估算：中文约 1.5 token/字，英文约 1.3 token/词
-	// 这里使用字符数 * 1.2 作为近似值
-	chineseChars := 0
-	englishWords := 0
+func isContextLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
 
-	for _, r := range text {
-		if r >= 0x4e00 && r <= 0x9fff {
-			chineseChars++
-		} else if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-			englishWords++
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.HTTPStatusCode == 400 || apiErr.HTTPStatusCode == 413 {
+			errMsg := strings.ToLower(apiErr.Message)
+			if strings.Contains(errMsg, "context length") ||
+				strings.Contains(errMsg, "maximum context") ||
+				strings.Contains(errMsg, "context window") ||
+				strings.Contains(errMsg, "too many tokens") ||
+				strings.Contains(errMsg, "prompt is too long") ||
+				strings.Contains(errMsg, "maximum allowed tokens") ||
+				strings.Contains(errMsg, "context_length_exceeded") {
+				return true
+			}
 		}
 	}
 
-	// 英文词数估算（简单按空格分割）
-	words := strings.Fields(text)
-	englishWords = len(words)
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "context length") ||
+		strings.Contains(errMsg, "maximum context") ||
+		strings.Contains(errMsg, "context window") ||
+		strings.Contains(errMsg, "too many tokens") ||
+		strings.Contains(errMsg, "prompt is too long") ||
+		strings.Contains(errMsg, "maximum allowed tokens") ||
+		strings.Contains(errMsg, "context_length_exceeded")
+}
 
-	// 总 token 估算
-	tokens := int(float64(chineseChars)*1.5 + float64(englishWords)*1.3)
-	if tokens < len(text)/4 {
-		// 如果估算值太小，使用字符数的 1/4 作为下限
-		tokens = len(text) / 4
+func nextReducedOutputLimit(current int) int {
+	if current <= minimumOutputTokens {
+		return current
 	}
 
-	return tokens
-}
-
-// ChatMessage 群聊单条消息
-type ChatMessage struct {
-	MessageID  int64
-	SenderID   int64
-	SenderName string
-	Text       string
-}
-
-// topicsSummaryJSON 用于解析 LLM 返回的话题分组 JSON
-type topicsSummaryJSON struct {
-	Topics []topicItemJSON `json:"topics"`
-}
-
-type topicItemJSON struct {
-	Title string            `json:"title"`
-	Items []topicSubItemJSON `json:"items"`
-}
-
-type topicSubItemJSON struct {
-	SenderName  string  `json:"sender_name"`
-	Description string  `json:"description"`
-	MessageIDs  []int64 `json:"message_ids"`
-}
-
-// messagesToPromptText 将消息数组转为 prompt 文本，格式为每行 "[发送者名|msg_id] 消息内容"
-func messagesToPromptText(msgs []ChatMessage) string {
-	lines := make([]string, len(msgs))
-	for i, m := range msgs {
-		lines[i] = fmt.Sprintf("[%s|%d] %s", m.SenderName, m.MessageID, m.Text)
+	next := current / 2
+	if next >= current {
+		next = current - 1
 	}
-	return strings.Join(lines, "\n")
+	if next < minimumOutputTokens {
+		next = minimumOutputTokens
+	}
+	return next
 }
 
-// splitMessagesIntoChunks 将消息数组按 token 估算拆分为多个 chunk
-func splitMessagesIntoChunks(msgs []ChatMessage, maxTokensPerChunk int) [][]ChatMessage {
-	if len(msgs) == 0 {
+func nextReducedChunkLimit(current int) int {
+	if current <= 1 {
+		return 0
+	}
+
+	next := current / 2
+	if next >= current {
+		next = current - 1
+	}
+	if next < 1 {
+		next = 1
+	}
+	return next
+}
+
+func shouldRetryLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if isContextLimitError(err) {
+		return false
+	}
+	if strings.Contains(err.Error(), "请求 token 预算不足") {
+		return false
+	}
+	return true
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) error {
+	if duration <= 0 {
 		return nil
 	}
-	chunks := make([][]ChatMessage, 0)
-	current := make([]ChatMessage, 0)
-	currentTokens := 0
 
-	for _, m := range msgs {
-		line := fmt.Sprintf("[%s|%d] %s", m.SenderName, m.MessageID, m.Text)
-		tokens := estimateTokens(line)
-		if currentTokens+tokens > maxTokensPerChunk && len(current) > 0 {
-			chunks = append(chunks, current)
-			current = nil
-			currentTokens = 0
-		}
-		current = append(current, m)
-		currentTokens += tokens
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
-	if len(current) > 0 {
-		chunks = append(chunks, current)
-	}
-	return chunks
 }
 
-// formatTopicsForContext 将话题摘要序列化为可读文本，用于多 chunk 增量合并时的上下文
-func formatTopicsForContext(topics []topicItemJSON) string {
-	var sb strings.Builder
-	for i, t := range topics {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, t.Title))
-		for _, item := range t.Items {
-			msgIDs := make([]string, len(item.MessageIDs))
-			for j, id := range item.MessageIDs {
-				msgIDs[j] = fmt.Sprintf("%d", id)
+func buildResponseFormat() *openai.ChatCompletionResponseFormat {
+	return &openai.ChatCompletionResponseFormat{Type: openai.ChatCompletionResponseFormatTypeJSONObject}
+}
+
+func (c *Client) callStructuredChatCompletion(ctx context.Context, systemPrompt, userPrompt string, maxOutputTokens int) (string, error) {
+	outputLimit := maxOutputTokens
+	if outputLimit <= 0 || outputLimit > c.maxOutputTokens {
+		outputLimit = c.maxOutputTokens
+	}
+	promptTokens := estimateTokens(systemPrompt) + estimateTokens(userPrompt)
+	remainingTokens := c.totalTokens - promptTokens - defaultPromptReserveTokens
+	if remainingTokens < outputLimit {
+		outputLimit = remainingTokens
+	}
+	if outputLimit < minimumOutputTokens {
+		return "", fmt.Errorf("请求 token 预算不足: prompt=%d, context=%d", promptTokens, c.totalTokens)
+	}
+
+	for shrinkAttempt := 0; ; shrinkAttempt++ {
+		req := openai.ChatCompletionRequest{
+			Model: c.config.Model,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+				{Role: openai.ChatMessageRoleUser, Content: userPrompt},
+			},
+			Temperature:    0.1,
+			MaxTokens:      outputLimit,
+			ResponseFormat: buildResponseFormat(),
+		}
+
+		resp, err := c.openaiClient.CreateChatCompletion(ctx, req)
+		if err != nil {
+			if isContextLimitError(err) && shrinkAttempt < maxContextLimitShrinkRetry {
+				nextOutputLimit := nextReducedOutputLimit(outputLimit)
+				if nextOutputLimit < outputLimit {
+					logger.Warnf("[LLM] 检测到上下文超限，自动收缩输出预算后重试: %d -> %d", outputLimit, nextOutputLimit)
+					outputLimit = nextOutputLimit
+					continue
+				}
 			}
-			sb.WriteString(fmt.Sprintf("   - %s: %s (msg:%s)\n", item.SenderName, item.Description, strings.Join(msgIDs, ",")))
+			return "", fmt.Errorf("调用 LLM API 失败: %w", err)
 		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("LLM API 返回空结果")
+		}
+
+		return trimResponseContent(resp.Choices[0].Message.Content), nil
 	}
-	return sb.String()
 }
 
-// mergeTopics 代码层兜底合并：将 partial 合并到 accumulated 中
-// 按 topic title 匹配，同一话题同一 sender 的 message_ids 取并集
-// 若旧话题在新结果中完全消失，原样保留
-func mergeTopics(accumulated, partial *topicsSummaryJSON) *topicsSummaryJSON {
-	if accumulated == nil {
-		return partial
-	}
-	if partial == nil {
-		return accumulated
-	}
+func (c *Client) requestTopicsSummary(ctx context.Context, spec topicsRequestSpec) (*topicsSummaryJSON, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 
-	// 建立旧话题 title -> index 的映射
-	oldTopicMap := make(map[string]int)
-	for i, t := range accumulated.Topics {
-		oldTopicMap[t.Title] = i
-	}
+	var lastErr error
+	requestMaxOutputTokens := c.maxOutputTokens
 
-	// 用 accumulated 作为基础，逐个处理 partial 的话题
-	result := &topicsSummaryJSON{
-		Topics: make([]topicItemJSON, len(accumulated.Topics)),
-	}
-	copy(result.Topics, accumulated.Topics)
-
-	for _, pt := range partial.Topics {
-		if oldIdx, exists := oldTopicMap[pt.Title]; exists {
-			// 同名话题：按 sender_name 合并 items
-			result.Topics[oldIdx] = mergeTopicItems(result.Topics[oldIdx], pt)
-		} else {
-			// 新话题：直接追加
-			result.Topics = append(result.Topics, pt)
+	for attempt := 1; attempt <= defaultLLMRetryAttempts; attempt++ {
+		userPrompt := spec.userPrompt
+		userPrompt += "\n\n" + jsonObjectFormatHint
+		if attempt > 1 {
+			userPrompt += "\n\n上一次输出未通过校验。请重新输出，必须满足：1. 只返回一个合法 JSON 对象；2. 不要 Markdown 代码块和任何解释；3. 只能使用输入中已有的 sender_name 和 message_ids；4. 不得输出额外字段；5. topics 必须非空。"
 		}
-	}
 
-	return result
-}
-
-// mergeTopicItems 合并同一话题下的 items，按 sender_name 去重并合并 message_ids
-func mergeTopicItems(old, new topicItemJSON) topicItemJSON {
-	merged := topicItemJSON{
-		Title: new.Title,
-		Items: make([]topicSubItemJSON, 0),
-	}
-
-	// 建立旧 items 的 sender_name -> index 映射
-	oldItemMap := make(map[string]int)
-	for i, item := range old.Items {
-		oldItemMap[item.SenderName] = i
-	}
-
-	// 先复制旧 items
-	merged.Items = append(merged.Items, old.Items...)
-
-	// 处理新 items
-	for _, newItem := range new.Items {
-		if oldIdx, exists := oldItemMap[newItem.SenderName]; exists {
-			// 同一 sender：合并 message_ids（取并集），更新 description
-			mergedIDs := mergeMessageIDs(merged.Items[oldIdx].MessageIDs, newItem.MessageIDs)
-			merged.Items[oldIdx] = topicSubItemJSON{
-				SenderName:  newItem.SenderName,
-				Description: newItem.Description,
-				MessageIDs:  mergedIDs,
+		raw, err := c.callStructuredChatCompletion(ctx, spec.systemPrompt, userPrompt, requestMaxOutputTokens)
+		if err == nil {
+			summary, parseErr := parseTopicsSummary(raw, spec.allowedMessageIDs, spec.allowedSenders)
+			if parseErr == nil {
+				return summary, nil
 			}
+			lastErr = parseErr
+			logger.Warnf("[LLM] %s 第 %d 次输出校验失败: %v", spec.taskName, attempt, parseErr)
 		} else {
-			// 新 sender：直接追加
-			merged.Items = append(merged.Items, newItem)
+			lastErr = err
+			logger.Warnf("[LLM] %s 第 %d 次请求失败: %v", spec.taskName, attempt, err)
+		}
+
+		if attempt == defaultLLMRetryAttempts || !shouldRetryLLMError(lastErr) {
+			break
+		}
+		if err := sleepWithContext(ctx, time.Duration(attempt)*retryBackoffBase); err != nil {
+			return nil, err
 		}
 	}
 
-	return merged
+	return nil, fmt.Errorf("%s失败: %w", spec.taskName, lastErr)
 }
 
-// mergeMessageIDs 合并两个 message_id 切片，去重
-func mergeMessageIDs(a, b []int64) []int64 {
-	seen := make(map[int64]bool)
-	for _, id := range a {
-		seen[id] = true
+func (c *Client) summarizeChatInChunks(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (*topicsSummaryJSON, error) {
+	if maxTokensPerChunk <= 0 {
+		maxTokensPerChunk = 1
 	}
-	for _, id := range b {
-		seen[id] = true
+
+	chatText := messagesToPromptText(messages)
+	tokens := estimateTokens(chatText)
+	logger.Infof("[LLM] 群聊消息过长 (%d tokens)，将按 %d tokens/chunk 进行总结并分层归并", tokens, maxTokensPerChunk)
+	chunks := splitMessagesIntoChunks(messages, maxTokensPerChunk)
+
+	partialSummaries := make([]*topicsSummaryJSON, 0, len(chunks))
+	for i, chunkMsgs := range chunks {
+		logger.Debugf("[LLM] 处理 chunk %d/%d", i+1, len(chunks))
+		summary, err := c.summarizeMessagesAdaptive(ctx, chunkMsgs, maxTokensPerChunk)
+		if err != nil {
+			return nil, fmt.Errorf("总结 chunk %d 失败: %w", i+1, err)
+		}
+		partialSummaries = append(partialSummaries, summary)
 	}
-	result := make([]int64, 0, len(seen))
-	// 保持顺序：先 a 中的，再 b 中新增的
-	for _, id := range a {
-		if seen[id] {
-			result = append(result, id)
-			delete(seen, id)
+
+	mergedSummary, err := c.mergeChunkSummaries(ctx, partialSummaries)
+	if err != nil {
+		return nil, fmt.Errorf("归并分块总结失败: %w", err)
+	}
+
+	return mergedSummary, nil
+}
+
+func (c *Client) summarizeMessagesAdaptive(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (*topicsSummaryJSON, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	if maxTokensPerChunk <= 0 {
+		maxTokensPerChunk = 1
+	}
+
+	chatText := messagesToPromptText(messages)
+	tokens := estimateTokens(chatText)
+	if tokens > maxTokensPerChunk {
+		if len(messages) == 1 {
+			return c.requestTopicsSummary(ctx, buildSummarizeMessagesSpec(messages))
+		}
+		return c.summarizeChatInChunks(ctx, messages, maxTokensPerChunk)
+	}
+
+	summary, err := c.requestTopicsSummary(ctx, buildSummarizeMessagesSpec(messages))
+	if err == nil {
+		return summary, nil
+	}
+
+	if isContextLimitError(err) && len(messages) > 1 {
+		nextChunkLimit := nextReducedChunkLimit(tokens)
+		if nextChunkLimit > 0 {
+			logger.Warnf("[LLM] 单次总结命中上下文限制，改用更小 chunk 预算 %d 继续重试: %v", nextChunkLimit, err)
+			return c.summarizeChatInChunks(ctx, messages, nextChunkLimit)
 		}
 	}
-	for _, id := range b {
-		if seen[id] {
-			result = append(result, id)
-			delete(seen, id)
-		}
+
+	return nil, err
+}
+
+func buildSummarizeMessagesSpec(messages []ChatMessage) topicsRequestSpec {
+	allowedMessageIDs, allowedSenders := buildAllowedSetsFromMessages(messages)
+	chunkContent := messagesToPromptText(messages)
+
+	return topicsRequestSpec{
+		taskName:          "总结消息分块",
+		systemPrompt:      `你是一个专业的群聊总结助手。根据用户提供的群聊内容，按话题分组总结，输出严格的 JSON。\n\n输入格式为每行 "[发言者名|消息ID] 消息内容"。\n\n输出要求：\n1. 只返回一个 JSON object，不要 Markdown 代码块，不要解释\n2. sender_name 必须与输入中的发言者名完全一致\n3. message_ids 只能使用输入中出现过的消息ID，每个 item 保留 1-3 个最具代表性的消息ID\n4. description 必须具体描述该发言者在该话题下的观点或贡献\n5. 话题数量控制在 5-15 个，按重要性排序\n6. 不要输出任何额外字段`,
+		userPrompt:        "群聊内容：\n" + chunkContent + "\n\n请只返回合法 JSON 对象。",
+		allowedMessageIDs: allowedMessageIDs,
+		allowedSenders:    allowedSenders,
 	}
-	return result
+}
+
+func buildMergeSummariesSpec(summaries []*topicsSummaryJSON) topicsRequestSpec {
+	allowedMessageIDs, allowedSenders := buildAllowedSetsFromSummaries(summaries)
+	batchContent := formatSummaryBatchForPrompt(summaries)
+
+	return topicsRequestSpec{
+		taskName:          "归并分块摘要",
+		systemPrompt:      `你是一个群聊话题归并助手。输入是多个分块摘要 JSON，它们已经符合统一结构。请将相同或高度相关的话题归并成更稳定的完整 JSON。\n\n归并要求：\n1. 同一主题即使标题略有不同，也要合并为一个更稳定的标题\n2. sender_name 只能使用输入摘要中已有的名字，且必须逐字一致\n3. message_ids 只能使用输入摘要中已有的消息ID，且需要尽量保留全部有效 ID\n4. 删除重复或空洞的话题，避免相同主题重复出现\n5. 只返回一个 JSON object，不要 Markdown 代码块，不要解释，不要额外字段`,
+		userPrompt:        "以下是来自不同消息分块的话题摘要 JSON。请将它们归并为一个完整 JSON：\n\n" + batchContent + "\n\n请只返回归并后的合法 JSON 对象。",
+		allowedMessageIDs: allowedMessageIDs,
+		allowedSenders:    allowedSenders,
+	}
+}
+
+func (c *Client) mergeChunkSummaries(ctx context.Context, summaries []*topicsSummaryJSON) (*topicsSummaryJSON, error) {
+	if len(summaries) == 0 {
+		return nil, nil
+	}
+	if len(summaries) == 1 {
+		return summaries[0], nil
+	}
+
+	mergeBudget := c.maxInputTokens
+	if mergeBudget < minimumMergeBatchTokens {
+		mergeBudget = minimumMergeBatchTokens
+	}
+
+	current := summaries
+	for round := 1; len(current) > 1; round++ {
+		batches := splitSummaryBatchesForMerge(current, mergeBudget)
+		if len(batches) == len(current) {
+			return mergeSummaryBatchFallback(current), nil
+		}
+
+		nextRound := make([]*topicsSummaryJSON, 0, len(batches))
+		for batchIndex, batch := range batches {
+			if len(batch) == 1 {
+				nextRound = append(nextRound, batch[0])
+				continue
+			}
+
+			summary, err := c.requestTopicsSummary(ctx, buildMergeSummariesSpec(batch))
+			if err != nil {
+				logger.Warnf("[LLM] 第 %d 轮归并 batch %d/%d 失败，回退到本地合并: %v", round, batchIndex+1, len(batches), err)
+				summary = mergeSummaryBatchFallback(batch)
+			}
+			nextRound = append(nextRound, summary)
+		}
+		current = nextRound
+	}
+
+	return current[0], nil
 }
 
 // SummarizeChat 将群聊消息总结为话题分组 JSON
@@ -244,110 +403,14 @@ func (c *Client) SummarizeChat(ctx context.Context, messages []ChatMessage) (str
 	if len(messages) == 0 {
 		return "", nil
 	}
-	chatText := messagesToPromptText(messages)
-	tokens := estimateTokens(chatText)
-
-	if tokens <= c.maxInputTokens {
-		return c.summarizeChatOnce(ctx, chatText, "")
-	}
-
-	// Token 超限，采用优化版增量拼接
-	logger.Infof("[LLM] 群聊消息过长 (%d tokens)，将拆分为多个 chunk 进行总结", tokens)
-	chunks := splitMessagesIntoChunks(messages, c.maxInputTokens)
-
-	var accumulated *topicsSummaryJSON
-	for i, chunkMsgs := range chunks {
-		logger.Debugf("[LLM] 处理 chunk %d/%d", i+1, len(chunks))
-		chunkText := messagesToPromptText(chunkMsgs)
-
-		var prevTopics string
-		if accumulated != nil {
-			prevTopics = formatTopicsForContext(accumulated.Topics)
-		}
-
-		raw, err := c.summarizeChatOnce(ctx, chunkText, prevTopics)
-		if err != nil {
-			return "", fmt.Errorf("总结 chunk %d 失败: %w", i+1, err)
-		}
-
-		var partial topicsSummaryJSON
-		if err := json.Unmarshal([]byte(raw), &partial); err != nil {
-			return "", fmt.Errorf("解析 chunk %d 的 JSON 失败: %w", i+1, err)
-		}
-
-		// 代码层兜底合并
-		accumulated = mergeTopics(accumulated, &partial)
-	}
-
-	data, _ := json.Marshal(accumulated)
-	return string(data), nil
-}
-
-// summarizeChatOnce 执行一次群聊总结请求，返回 JSON 字符串
-func (c *Client) summarizeChatOnce(ctx context.Context, chunkContent, prevTopicsSummary string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	systemPrompt := `你是一个专业的群聊总结助手。根据用户提供的群聊内容，按话题分组总结，输出严格的 JSON 格式。
-
-输入格式为每行 "[发言者名|消息ID] 消息内容"。
-
-输出要求：
-{
-  "topics": [
-    {
-      "title": "话题标题（简洁概括）",
-      "items": [
-        {
-          "sender_name": "发言者名",
-          "description": "该发言者在此话题下的贡献总结",
-          "message_ids": [对应的消息ID数组]
-        }
-      ]
-    }
-  ]
-}
-
-注意事项：
-1. 按讨论话题归类，每个话题 2-4 条子项
-2. sender_name 必须与输入中的发言者名完全一致
-3. message_ids 返回该发言者在此话题下发言的最具代表性的 1-3 条消息ID（选择最能代表其贡献的关键消息）
-4. description 应具体描述该发言者的观点或贡献
-5. 话题数量控制在 5-15 个，按重要性排序
-6. 只输出 JSON，不要其他内容`
-
-	userPrompt := chunkContent
-	if prevTopicsSummary != "" {
-		userPrompt = "【上一轮已有话题总结，请在此基础上合并新内容后输出更新后的完整 JSON】\n\n"
-		userPrompt += "上一轮话题总结：\n" + prevTopicsSummary + "\n\n"
-		userPrompt += "新消息内容：\n" + chunkContent + "\n\n请输出更新后的完整 topics JSON（合并已有话题或新增话题，保留所有 message_ids）。"
-	} else {
-		userPrompt = "群聊内容：\n" + chunkContent + "\n\n请输出 JSON。"
-	}
-
-	req := openai.ChatCompletionRequest{
-		Model: c.config.Model,
-		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
-		},
-		Temperature: 0.3,
-		MaxTokens:   4000,
-	}
-
-	resp, err := c.openaiClient.CreateChatCompletion(ctx, req)
+	summary, err := c.summarizeMessagesAdaptive(ctx, messages, c.maxInputTokens)
 	if err != nil {
-		return "", fmt.Errorf("调用 LLM API 失败: %w", err)
+		return "", err
 	}
 
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("LLM API 返回空结果")
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return "", fmt.Errorf("序列化总结结果失败: %w", err)
 	}
-
-	content := strings.TrimSpace(resp.Choices[0].Message.Content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	return content, nil
+	return string(data), nil
 }

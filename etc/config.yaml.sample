@@ -13,8 +13,9 @@ TelegramApp:
 LLM:
   BaseURL: https://api.openai.com/v1  # 兼容 OpenAI API 的端点
   APIKey: your-api-key-here
-  Model: gpt-4o  # 如 gpt-4o, deepseek-chat, qwen-plus
-  MaxTokens: 128000  # 模型上下文窗口大小
+  Model: deepseek-v4-flash  # 如 gpt-4o, deepseek-chat, qwen-plus
+  MaxTokens: 1000000  # 模型上下文窗口大小；如使用 DeepSeek V4 可按模型规格调整到 1000000
+  MaxOutputTokens: 384000  # 单次最大输出 tokens；DeepSeek V4 可按需提高到 384000
 
 # 总结配置
 Summary:

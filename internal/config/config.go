@@ -19,10 +19,11 @@ type TelegramApp struct {
 }
 
 type LLM struct {
-	BaseURL   string `yaml:"BaseURL"` // 兼容 OpenAI API 的端点
-	APIKey    string `yaml:"APIKey"`
-	Model     string `yaml:"Model"`     // 如 gpt-4o, deepseek-chat, qwen-plus
-	MaxTokens int    `yaml:"MaxTokens"` // 模型上下文窗口大小
+	BaseURL         string `yaml:"BaseURL"` // 兼容 OpenAI API 的端点
+	APIKey          string `yaml:"APIKey"`
+	Model           string `yaml:"Model"`           // 如 gpt-4o, deepseek-chat, qwen-plus
+	MaxTokens       int    `yaml:"MaxTokens"`       // 模型上下文窗口大小
+	MaxOutputTokens int    `yaml:"MaxOutputTokens"` // 单次请求允许的最大输出 tokens，未配置时按上下文窗口自动推导
 }
 
 type Summary struct {
@@ -95,6 +96,12 @@ func (c *Config) Validate() error {
 	}
 	if c.LLM.MaxTokens <= 0 {
 		return fmt.Errorf("LLM.MaxTokens 必须大于 0")
+	}
+	if c.LLM.MaxOutputTokens < 0 {
+		return fmt.Errorf("LLM.MaxOutputTokens 不能小于 0")
+	}
+	if c.LLM.MaxOutputTokens >= c.LLM.MaxTokens {
+		return fmt.Errorf("LLM.MaxOutputTokens 必须小于 LLM.MaxTokens")
 	}
 
 	// 验证 Summary
