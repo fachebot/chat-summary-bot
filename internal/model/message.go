@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/fachebot/chat-summary-bot/internal/ent"
 	"github.com/fachebot/chat-summary-bot/internal/ent/message"
 )
@@ -28,6 +29,19 @@ type MessageData struct {
 
 // Create 创建消息
 func (m *MessageModel) Create(ctx context.Context, data *MessageData) (*ent.Message, error) {
+	existing, err := m.client.Query().
+		Where(
+			message.ChatIDEQ(data.ChatID),
+			message.MessageIDEQ(data.MessageID),
+		).
+		Only(ctx)
+	if err == nil {
+		return existing, nil
+	}
+	if err != nil && !ent.IsNotFound(err) {
+		return nil, err
+	}
+
 	create := m.client.Create().
 		SetMessageID(data.MessageID).
 		SetChatID(data.ChatID).
@@ -39,7 +53,21 @@ func (m *MessageModel) Create(ctx context.Context, data *MessageData) (*ent.Mess
 	if data.SenderUsername != nil {
 		create.SetSenderUsername(*data.SenderUsername)
 	}
-	return create.Save(ctx)
+
+	created, err := create.Save(ctx)
+	if err == nil {
+		return created, nil
+	}
+	if !ent.IsConstraintError(err) {
+		return nil, err
+	}
+
+	return m.client.Query().
+		Where(
+			message.ChatIDEQ(data.ChatID),
+			message.MessageIDEQ(data.MessageID),
+		).
+		Only(ctx)
 }
 
 // GetByDateAndChat 按日期和群聊查询消息（统一使用 UTC）
@@ -174,6 +202,69 @@ func (m *MessageModel) GetChatIDsByDateRange(ctx context.Context, startTime, end
 	}
 
 	return chatIDs, nil
+}
+
+// GetAllChatIDs 查询数据库中已有消息的所有群组ID。
+func (m *MessageModel) GetAllChatIDs(ctx context.Context) ([]int64, error) {
+	messages, err := m.client.Query().
+		Select(message.FieldChatID).
+		Order(message.ByChatID()).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	chatIDMap := make(map[int64]struct{}, len(messages))
+	chatIDs := make([]int64, 0, len(messages))
+	for _, msg := range messages {
+		if _, exists := chatIDMap[msg.ChatID]; exists {
+			continue
+		}
+		chatIDMap[msg.ChatID] = struct{}{}
+		chatIDs = append(chatIDs, msg.ChatID)
+	}
+
+	return chatIDs, nil
+}
+
+// GetLatestMessageIDByChat 查询群组中已保存的最新 Telegram 消息ID。
+func (m *MessageModel) GetLatestMessageIDByChat(ctx context.Context, chatID int64) (int64, error) {
+	latest, err := m.client.Query().
+		Where(message.ChatIDEQ(chatID)).
+		Order(message.ByMessageID(entsql.OrderDesc())).
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	return latest.MessageID, nil
+}
+
+// GetLatestMessageIDsByChat 查询所有群组当前已保存的最新 Telegram 消息ID快照。
+func (m *MessageModel) GetLatestMessageIDsByChat(ctx context.Context) (map[int64]int64, error) {
+	messages, err := m.client.Query().
+		Select(message.FieldChatID, message.FieldMessageID).
+		Order(
+			message.ByChatID(),
+			message.ByMessageID(entsql.OrderDesc()),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	latestByChat := make(map[int64]int64, len(messages))
+	for _, msg := range messages {
+		if _, exists := latestByChat[msg.ChatID]; exists {
+			continue
+		}
+		latestByChat[msg.ChatID] = msg.MessageID
+	}
+
+	return latestByChat, nil
 }
 
 // DeleteBefore 删除指定日期之前的消息

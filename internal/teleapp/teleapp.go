@@ -5,11 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/fachebot/chat-summary-bot/internal/logger"
 	"github.com/fachebot/chat-summary-bot/internal/market_indicators"
-	"github.com/fachebot/chat-summary-bot/internal/model"
 	"github.com/fachebot/chat-summary-bot/internal/svc"
 
 	"github.com/zelenin/go-tdlib/client"
@@ -111,10 +109,22 @@ func (app *TeleApp) Login(options ...client.Option) (*client.User, error) {
 	app.listener = listener
 
 	app.ctxMu.Lock()
-	app.ctx, app.cancel = context.WithCancel(context.Background())
+	baseCtx := app.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	app.ctx, app.cancel = context.WithCancel(baseCtx)
+	snapshotCtx := app.ctx
 	app.ctxMu.Unlock()
 
+	historyCheckpoints, err := app.svcCtx.MessageModel.GetLatestMessageIDsByChat(snapshotCtx)
+	if err != nil {
+		logger.Warnf("[TeleApp] 获取历史补拉快照失败，将仅依赖实时更新: %v", err)
+		historyCheckpoints = nil
+	}
+
 	go app.getUpdates(listener)
+	app.startHistoryCatchUp(historyCheckpoints)
 
 	return me, nil
 }
@@ -218,26 +228,6 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 				continue
 			}
 
-			messageText := text.Text.Text
-
-			logger.Debugf("[TeleApp] 接收消息: %s(%d) -> %s", messageText, message.Id)
-
-			isGroupChat := false
-
-			chat, err := app.getChat(message.ChatId)
-			if err != nil {
-				logger.Warnf("[TeleApp] 获取聊天信息失败, id: %d, %v", message.ChatId, err)
-				continue
-			}
-
-			switch chat.Type.ChatTypeType() {
-			case client.TypeChatTypePrivate, client.TypeChatTypeSecret:
-			case client.TypeChatTypeBasicGroup, client.TypeChatTypeSupergroup:
-				isGroupChat = true
-			default:
-				continue
-			}
-
 			senderID := int64(0)
 			var senderName string
 
@@ -255,6 +245,25 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 						}
 					}
 				}
+			}
+
+			messageText := text.Text.Text
+			logger.Debugf("[TeleApp] 接收消息: %s(%d) -> %s", senderName, senderID, messageText)
+
+			isGroupChat := false
+
+			chat, err := app.getChat(message.ChatId)
+			if err != nil {
+				logger.Warnf("[TeleApp] 获取聊天信息失败, id: %d, %v", message.ChatId, err)
+				continue
+			}
+
+			switch chat.Type.ChatTypeType() {
+			case client.TypeChatTypePrivate, client.TypeChatTypeSecret:
+			case client.TypeChatTypeBasicGroup, client.TypeChatTypeSupergroup:
+				isGroupChat = true
+			default:
+				continue
 			}
 
 			shouldRespond := false
@@ -318,39 +327,14 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 			}
 
 			if isGroupChat {
-				if !app.svcCtx.Config.Summary.ShouldSaveMessage(message.ChatId) {
-					logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
-					continue
-				}
-
-				var senderUsername *string
-				if message.SenderId != nil {
-					if sender, ok := message.SenderId.(*client.MessageSenderUser); ok {
-						user, err := app.getUser(sender.UserId)
-						if err == nil && user.Usernames != nil && len(user.Usernames.ActiveUsernames) > 0 {
-							username := "@" + user.Usernames.ActiveUsernames[0]
-							senderUsername = &username
-						}
-					}
-				}
-
-				msgData := &model.MessageData{
-					MessageID:      message.Id,
-					ChatID:         message.ChatId,
-					SenderID:       senderID,
-					SenderName:     senderName,
-					SenderUsername: senderUsername,
-					Text:           messageText,
-					SentAt:         time.Unix(int64(message.Date), 0).UTC(),
-				}
-
-				_, err = app.svcCtx.MessageModel.Create(ctx, msgData)
+				saved, err := app.saveGroupTextMessage(ctx, message, true)
 				if err != nil {
 					logger.Errorf("[TeleApp] 保存消息失败, %v", err)
 					continue
 				}
-
-				logger.Debugf("[TeleApp] 保存消息: %s[%d] -> %s: %s", chat.Title, chat.Id, senderName, messageText)
+				if !saved && !app.svcCtx.Config.Summary.ShouldSaveMessage(message.ChatId) {
+					logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
+				}
 			}
 		}
 	}

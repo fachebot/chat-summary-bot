@@ -18,6 +18,8 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+const sqliteDataSource = "file:data/sqlite.db?mode=rwc&_journal_mode=WAL&_fk=1"
+
 type ServiceContext struct {
 	Config         *config.Config
 	DbClient       *ent.Client
@@ -32,8 +34,12 @@ type ServiceContext struct {
 }
 
 func NewServiceContext(c *config.Config) *ServiceContext {
+	if err := ensureMessageTableForwardCompatibility(context.Background(), "sqlite3", sqliteDataSource); err != nil {
+		logger.Fatalf("准备数据库兼容迁移失败, %v", err)
+	}
+
 	// 创建数据库连接
-	client, err := ent.Open("sqlite3", "file:data/sqlite.db?mode=rwc&_journal_mode=WAL&_fk=1")
+	client, err := ent.Open("sqlite3", sqliteDataSource)
 	if err != nil {
 		logger.Fatalf("打开数据库失败, %v", err)
 	}

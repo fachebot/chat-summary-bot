@@ -54,6 +54,13 @@ var (
 		Name:       "messages",
 		Columns:    MessagesColumns,
 		PrimaryKey: []*schema.Column{MessagesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "message_chat_id_message_id",
+				Unique:  true,
+				Columns: []*schema.Column{MessagesColumns[4], MessagesColumns[3]},
+			},
+		},
 	}
 	// SummariesColumns holds the columns for the "summaries" table.
 	SummariesColumns = []*schema.Column{
