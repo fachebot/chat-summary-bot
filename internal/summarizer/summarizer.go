@@ -57,11 +57,6 @@ func escapeHTML(text string) string {
 	return result
 }
 
-// isSummaryMessage 判断消息是否为机器人发送的总结消息
-func isSummaryMessage(text string) bool {
-	return strings.HasPrefix(text, "📊 群组总结") || strings.HasPrefix(text, "📊 BTC抄底指标")
-}
-
 // SummarizeRange 生成指定时间区间的群聊总结
 func (s *Summarizer) SummarizeRange(ctx context.Context, chatID int64, startTime, endTime time.Time) (*SummaryResult, error) {
 	startStr := startTime.Format("2006-01-02")
@@ -80,16 +75,16 @@ func (s *Summarizer) SummarizeRange(ctx context.Context, chatID int64, startTime
 
 	logger.Infof("[Summarizer] 找到 %d 条消息", len(messages))
 
-	// 过滤掉机器人自己发送的总结消息（通过消息内容特征判断）
+	// 过滤掉机器人自己发送的所有消息，避免历史总结或机器人回复再次进入后续总结。
 	filtered := make([]*ent.Message, 0, len(messages))
 	for _, msg := range messages {
-		if msg.SenderID == s.botUserID && isSummaryMessage(msg.Text) {
+		if s.botUserID > 0 && msg.SenderID == s.botUserID {
 			continue
 		}
 		filtered = append(filtered, msg)
 	}
 	messages = filtered
-	logger.Infof("[Summarizer] 过滤机器人总结消息后剩余 %d 条消息", len(messages))
+	logger.Infof("[Summarizer] 过滤机器人消息后剩余 %d 条消息", len(messages))
 
 	if len(messages) == 0 {
 		logger.Infof("[Summarizer] 过滤后无消息，跳过总结")

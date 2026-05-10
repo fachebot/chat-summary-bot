@@ -99,7 +99,7 @@ func TestFormatSummaryForDisplay(t *testing.T) {
 			chatID:    chatID,
 			startDate: "2026-02-11",
 			endDate:   "2026-02-11",
-			want: "📊 <b>群组总结</b>\n📅 2026-02-11 至 2026-02-11 (UTC)\n\n" +
+			want: "📊 <b>群组总结</b>\n🏠 <a href=\"https://t.me/c/1427755127\">测试群组</a>\n📅 2026-02-11 至 2026-02-11 (UTC)\n\n" +
 				"1. 技术方案讨论\n" +
 				"- <b>张三</b> 分享了技术方案 [<a href=\"https://t.me/c/1427755127/100\">link</a>] [<a href=\"https://t.me/c/1427755127/101\">link</a>]\n" +
 				"- <b>李四</b> 提出了优化建议 [<a href=\"https://t.me/c/1427755127/102\">link</a>]\n",
@@ -125,7 +125,7 @@ func TestFormatSummaryForDisplay(t *testing.T) {
 			chatID:    chatID,
 			startDate: "2026-02-10",
 			endDate:   "2026-02-11",
-			want: "📊 <b>群组总结</b>\n📅 2026-02-10 至 2026-02-11 (UTC)\n\n" +
+			want: "📊 <b>群组总结</b>\n🏠 <a href=\"https://t.me/c/1427755127\">测试群组</a>\n📅 2026-02-10 至 2026-02-11 (UTC)\n\n" +
 				"1. 话题一\n" +
 				"- <b>A</b> 说了什么 [<a href=\"https://t.me/c/1427755127/1\">link</a>]\n\n" +
 				"2. 话题二\n" +
@@ -333,6 +333,42 @@ func TestSummarizeRange_PassesStructuredMessages(t *testing.T) {
 	assert.Equal(t, int64(200), capturedMsgs[1].SenderID)
 	assert.Equal(t, "Bob", capturedMsgs[1].SenderName)
 	assert.Equal(t, "Hi there", capturedMsgs[1].Text)
+}
+
+func TestSummarizeRange_ExcludesAllBotMessages(t *testing.T) {
+	now := time.Now()
+	msgProvider := &mockMessageProvider{
+		messages: []*ent.Message{
+			mustEntMessage(100, 777, "bot", "📊 群组总结", now),
+			mustEntMessage(101, 777, "bot", "普通机器人回复，也应该排除", now),
+			mustEntMessage(102, 1, "张三", "正常用户消息", now),
+		},
+	}
+
+	var capturedMsgs []llm.ChatMessage
+	llmWrapper := &capturingLLM{
+		inner: &mockLLMSummarizer{
+			jsonResp: `{"topics":[{"title":"讨论","items":[{"sender_name":"张三","description":"正常用户消息","message_ids":[102]}]}]}`,
+		},
+		capture: func(msgs []llm.ChatMessage) { capturedMsgs = msgs },
+	}
+
+	s := &Summarizer{
+		messageModel: msgProvider,
+		llmClient:    llmWrapper,
+		botUserID:    777,
+	}
+	ctx := context.Background()
+	start := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2025, 2, 8, 0, 0, 0, 0, time.UTC)
+
+	_, err := s.SummarizeRange(ctx, 123, start, end)
+	assert.NoError(t, err)
+	assert.Len(t, capturedMsgs, 1)
+	assert.Equal(t, int64(102), capturedMsgs[0].MessageID)
+	assert.Equal(t, int64(1), capturedMsgs[0].SenderID)
+	assert.Equal(t, "张三", capturedMsgs[0].SenderName)
+	assert.Equal(t, "正常用户消息", capturedMsgs[0].Text)
 }
 
 // capturingLLM 用于在测试中捕获传给 SummarizeChat 的消息数组
