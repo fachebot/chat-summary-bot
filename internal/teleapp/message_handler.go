@@ -68,6 +68,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 
 	shouldRespond := false
 	isSummaryCommand := false
+	isGetUserIDCommand := false
 
 	if !isGroupChat {
 		if strings.Contains(messageText, "抄底") {
@@ -85,12 +86,30 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			trimmedText = strings.TrimPrefix(trimmedText, mentionPattern)
 			trimmedText = strings.TrimSpace(trimmedText)
 		}
-		if hasMention && strings.HasPrefix(trimmedText, "/summary") {
-			isSummaryCommand = true
-		}
 
 		if hasMention && strings.Contains(messageText, "抄底") {
 			shouldRespond = true
+		}
+
+		if hasMention && strings.HasPrefix(trimmedText, "/getuserid") {
+			isGetUserIDCommand = true
+		}
+
+		if hasMention && (strings.HasPrefix(trimmedText, "/sum") || strings.HasPrefix(trimmedText, "/summary")) {
+			isSummaryCommand = true
+		}
+	}
+
+	if isGetUserIDCommand {
+		replyText, err := app.buildGetUserIDReply(ctx, message)
+		if err != nil {
+			logger.Errorf("[TeleApp] 处理 /getuserid 失败: %v", err)
+			replyText = "获取被回复用户 ID 失败，请稍后再试。"
+		}
+		if err := app.sendMessage(ctx, message.ChatId, message.Id, replyText); err != nil {
+			logger.Errorf("[TeleApp] 发送 /getuserid 结果失败: %v", err)
+		} else {
+			logger.Infof("[TeleApp] 已回复 /getuserid, chat=%d, requester=%d, message=%d", message.ChatId, senderID, message.Id)
 		}
 	}
 
@@ -132,6 +151,47 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
 		}
 	}
+}
+
+func (app *TeleApp) buildGetUserIDReply(ctx context.Context, message *client.Message) (string, error) {
+	if message == nil {
+		return "请先回复目标用户的一条消息，再发送 @机器人 /getuserid。", nil
+	}
+
+	replyTo, ok := message.ReplyTo.(*client.MessageReplyToMessage)
+	if !ok || replyTo == nil || replyTo.MessageId == 0 {
+		return "请先回复目标用户的一条消息，再发送 @机器人 /getuserid。", nil
+	}
+
+	repliedChatID := replyTo.ChatId
+	if repliedChatID == 0 {
+		repliedChatID = message.ChatId
+	}
+
+	repliedMessage, err := app.tdClient.GetMessage(&client.GetMessageRequest{
+		ChatId:    repliedChatID,
+		MessageId: replyTo.MessageId,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	targetUserID, targetName, targetUsername := app.resolveMessageSender(repliedMessage)
+	if targetUserID == 0 {
+		return "被回复的消息不是普通用户发送，无法获取 Telegram 用户 ID。", nil
+	}
+
+	lines := []string{fmt.Sprintf("ID: %d", targetUserID)}
+	if trimmedName := strings.TrimSpace(targetName); trimmedName != "" {
+		lines = append(lines, fmt.Sprintf("昵称: %s", trimmedName))
+	}
+	if targetUsername != nil {
+		if trimmedUsername := strings.TrimSpace(*targetUsername); trimmedUsername != "" {
+			lines = append(lines, fmt.Sprintf("用户名: %s", trimmedUsername))
+		}
+	}
+
+	return strings.Join(lines, "\n"), nil
 }
 
 func isSupportedGroupChat(chat *client.Chat) bool {
