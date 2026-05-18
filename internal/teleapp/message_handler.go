@@ -128,6 +128,9 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			}
 		} else {
 			logger.Warnf("[TeleApp] 用户 %d 不在白名单中，拒绝手动摘要请求", senderID)
+			if err := app.sendMessage(ctx, message.ChatId, message.Id, "你不在白名单中，不能使用该功能。"); err != nil {
+				logger.Errorf("[TeleApp] 发送白名单拒绝提示失败: %v", err)
+			}
 		}
 	}
 
