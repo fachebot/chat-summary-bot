@@ -40,3 +40,16 @@ MarketIndicator:
   Cron: "0 1 * * *" # cron 表达式，每天 UTC 1点执行（北京时间 9点）
   Whitelist: # 白名单群组ID列表，为空表示所有群组
   Blacklist: # 黑名单群组ID列表
+
+# Telegram -> Lark 实时转发配置
+LarkForward:
+  Enable: false # 是否启用指定 Telegram 用户消息实时转发
+  AppID: cli_xxxxxxxxxxxxxxxxx # Lark 自建应用 App ID
+  AppSecret: your-app-secret # Lark 自建应用 App Secret
+  UrgentUserIDType: open_id # open_id / union_id / user_id
+  UrgentUserIDs: # 需要接收私聊告警并执行应用内加急的 Lark 用户 ID 列表
+    # - ou_xxxxxxxxxxxxxxxxx
+  MonitorTelegramUserIDs: # 需要监控的 Telegram 用户 ID 列表
+    # - 123456789
+  MonitorTelegramUsernames: # 需要监控的 Telegram 用户名列表，可带 @
+    # - target_user

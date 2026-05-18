@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fachebot/chat-summary-bot/internal/lark"
 	"github.com/fachebot/chat-summary-bot/internal/logger"
 	"github.com/fachebot/chat-summary-bot/internal/market_indicators"
 	"github.com/fachebot/chat-summary-bot/internal/svc"
@@ -29,6 +30,7 @@ type TeleApp struct {
 	marketIndicators *market_indicators.MarketIndicators
 	summaryHandler   func(ctx context.Context, chatID int64) error
 	adminUserIds     []int64
+	larkForwarder    *lark.Client
 }
 
 func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, marketIndicators *market_indicators.MarketIndicators) *TeleApp {
@@ -68,6 +70,10 @@ func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, ma
 func (app *TeleApp) SetSummaryHandler(handler func(ctx context.Context, chatID int64) error, adminUserIds []int64) {
 	app.summaryHandler = handler
 	app.adminUserIds = adminUserIds
+}
+
+func (app *TeleApp) SetLarkForwarder(forwarder *lark.Client) {
+	app.larkForwarder = forwarder
 }
 
 func (app *TeleApp) Login(options ...client.Option) (*client.User, error) {
@@ -217,125 +223,7 @@ func (app *TeleApp) getUpdates(listener *client.Listener) {
 			}
 
 			updateNewMessage := update.(*client.UpdateNewMessage)
-			message := updateNewMessage.Message
-
-			if message.Content.MessageContentType() != "messageText" {
-				continue
-			}
-
-			text := message.Content.(*client.MessageText)
-			if text.Text == nil || text.Text.Text == "" {
-				continue
-			}
-
-			senderID := int64(0)
-			var senderName string
-
-			if message.SenderId != nil {
-				switch sender := message.SenderId.(type) {
-				case *client.MessageSenderUser:
-					senderID = sender.UserId
-					user, err := app.getUser(sender.UserId)
-					if err != nil {
-						logger.Warnf("[TeleApp] 获取用户信息失败, id: %d, %v", sender.UserId, err)
-					} else {
-						senderName = user.FirstName
-						if user.LastName != "" {
-							senderName += " " + user.LastName
-						}
-					}
-				}
-			}
-
-			messageText := text.Text.Text
-			logger.Debugf("[TeleApp] 接收消息: %s(%d) -> %s", senderName, senderID, messageText)
-
-			isGroupChat := false
-
-			chat, err := app.getChat(message.ChatId)
-			if err != nil {
-				logger.Warnf("[TeleApp] 获取聊天信息失败, id: %d, %v", message.ChatId, err)
-				continue
-			}
-
-			switch chat.Type.ChatTypeType() {
-			case client.TypeChatTypePrivate, client.TypeChatTypeSecret:
-			case client.TypeChatTypeBasicGroup, client.TypeChatTypeSupergroup:
-				isGroupChat = true
-			default:
-				continue
-			}
-
-			shouldRespond := false
-			isSummaryCommand := false
-
-			// 私聊抄底
-			if senderID != app.user.Id && !isGroupChat {
-				if strings.Contains(messageText, "抄底") {
-					shouldRespond = true
-				}
-			}
-
-			// 群聊处理（/summary 命令 + 抄底 mention）
-			if senderID != app.user.Id && isGroupChat {
-				mentionPattern := app.user.FirstName
-				if botUsername != "" {
-					mentionPattern = "@" + botUsername
-				}
-				hasMention := strings.Contains(strings.ToLower(messageText), mentionPattern)
-
-				trimmedText := strings.TrimSpace(messageText)
-				if hasMention {
-					trimmedText = strings.TrimPrefix(trimmedText, mentionPattern)
-					trimmedText = strings.TrimSpace(trimmedText)
-				}
-				if hasMention && strings.HasPrefix(trimmedText, "/summary") {
-					isSummaryCommand = true
-				}
-
-				if hasMention && strings.Contains(messageText, "抄底") {
-					shouldRespond = true
-				}
-			}
-
-			if isSummaryCommand && senderID != app.user.Id && app.summaryHandler != nil {
-				isAdmin := false
-				for _, adminID := range app.adminUserIds {
-					if senderID == adminID {
-						isAdmin = true
-						break
-					}
-				}
-				if isAdmin {
-					logger.Infof("[TeleApp] 用户 %d 在群组 %d 请求手动摘要", senderID, message.ChatId)
-					if err := app.summaryHandler(ctx, message.ChatId); err != nil {
-						logger.Errorf("[TeleApp] 手动摘要失败: %v", err)
-					}
-				} else {
-					logger.Warnf("[TeleApp] 用户 %d 不在白名单中，拒绝手动摘要请求", senderID)
-				}
-			}
-
-			if shouldRespond && app.marketIndicators != nil {
-				indicatorText := app.marketIndicators.GetFormattedText()
-				err := app.sendMessage(ctx, message.ChatId, message.Id, indicatorText, &client.TextParseModeHTML{})
-				if err != nil {
-					logger.Errorf("[TeleApp] 发送抄底指标失败: %v", err)
-				} else {
-					logger.Infof("[TeleApp] 已发送抄底指标到 %s", chat.Title)
-				}
-			}
-
-			if isGroupChat {
-				saved, err := app.saveGroupTextMessage(ctx, message, true)
-				if err != nil {
-					logger.Errorf("[TeleApp] 保存消息失败, %v", err)
-					continue
-				}
-				if !saved && !app.svcCtx.Config.Summary.ShouldSaveMessage(message.ChatId) {
-					logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
-				}
-			}
+			app.handleIncomingMessage(ctx, updateNewMessage.Message, botUsername)
 		}
 	}
 }

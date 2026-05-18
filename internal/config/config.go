@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,12 +47,23 @@ type MarketIndicator struct {
 	Blacklist []int64 `yaml:"Blacklist"` // 黑名单群组ID列表
 }
 
+type LarkForward struct {
+	Enable                   bool     `yaml:"Enable"`                   // 是否启用 Telegram -> Lark 实时转发
+	AppID                    string   `yaml:"AppID"`                    // Lark 自建应用 App ID
+	AppSecret                string   `yaml:"AppSecret"`                // Lark 自建应用 App Secret
+	UrgentUserIDType         string   `yaml:"UrgentUserIDType"`         // 直发私聊与应用内加急使用的用户 ID 类型: open_id / union_id / user_id
+	UrgentUserIDs            []string `yaml:"UrgentUserIDs"`            // 需要接收私聊告警并执行应用内加急的 Lark 用户 ID 列表
+	MonitorTelegramUserIDs   []int64  `yaml:"MonitorTelegramUserIDs"`   // 需要监控的 Telegram 用户 ID 列表
+	MonitorTelegramUsernames []string `yaml:"MonitorTelegramUsernames"` // 需要监控的 Telegram 用户名列表（支持带 @）
+}
+
 type Config struct {
 	Sock5Proxy      Sock5Proxy      `yaml:"Sock5Proxy"`
 	TelegramApp     TelegramApp     `yaml:"TelegramApp"`
 	LLM             LLM             `yaml:"LLM"`
 	Summary         Summary         `yaml:"Summary"`
 	MarketIndicator MarketIndicator `yaml:"MarketIndicator"`
+	LarkForward     LarkForward     `yaml:"LarkForward"`
 }
 
 func LoadFromFile(filename string) (*Config, error) {
@@ -132,7 +144,89 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("Whitelist 和 Blacklist 不能同时设置")
 	}
 
+	if c.LarkForward.Enable {
+		if c.LarkForward.AppID == "" {
+			return fmt.Errorf("LarkForward.AppID 不能为空")
+		}
+		if c.LarkForward.AppSecret == "" {
+			return fmt.Errorf("LarkForward.AppSecret 不能为空")
+		}
+		if len(c.LarkForward.EffectiveUrgentUserIDs()) == 0 {
+			return fmt.Errorf("LarkForward.UrgentUserIDs 不能为空")
+		}
+		if len(c.LarkForward.MonitorTelegramUserIDs) == 0 && len(c.LarkForward.MonitorTelegramUsernames) == 0 {
+			return fmt.Errorf("LarkForward.MonitorTelegramUserIDs 和 LarkForward.MonitorTelegramUsernames 不能同时为空")
+		}
+
+		switch c.LarkForward.EffectiveUrgentUserIDType() {
+		case "open_id", "union_id", "user_id":
+		default:
+			return fmt.Errorf("LarkForward.UrgentUserIDType 必须是 'open_id', 'union_id' 或 'user_id'")
+		}
+	}
+
 	return nil
+}
+
+func (l *LarkForward) EffectiveUrgentUserIDType() string {
+	if l == nil {
+		return "open_id"
+	}
+
+	if normalized := strings.TrimSpace(strings.ToLower(l.UrgentUserIDType)); normalized != "" {
+		return normalized
+	}
+	return "open_id"
+}
+
+func (l *LarkForward) EffectiveUrgentUserIDs() []string {
+	if l == nil {
+		return nil
+	}
+	if len(l.UrgentUserIDs) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(l.UrgentUserIDs))
+	for _, userID := range l.UrgentUserIDs {
+		trimmed := strings.TrimSpace(userID)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
+}
+
+func (l *LarkForward) ShouldMonitorUser(userID int64, username string) bool {
+	if l == nil || !l.Enable {
+		return false
+	}
+
+	for _, candidate := range l.MonitorTelegramUserIDs {
+		if candidate == userID {
+			return true
+		}
+	}
+
+	normalizedUsername := normalizeTelegramUsername(username)
+	if normalizedUsername == "" {
+		return false
+	}
+
+	for _, candidate := range l.MonitorTelegramUsernames {
+		if normalizeTelegramUsername(candidate) == normalizedUsername {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeTelegramUsername(username string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(username))
+	trimmed = strings.TrimPrefix(trimmed, "@")
+	return trimmed
 }
 
 // FilterChatIDs 根据白名单/黑名单过滤群组ID

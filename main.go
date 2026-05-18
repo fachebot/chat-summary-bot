@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/fachebot/chat-summary-bot/internal/config"
+	"github.com/fachebot/chat-summary-bot/internal/lark"
 	"github.com/fachebot/chat-summary-bot/internal/logger"
 	"github.com/fachebot/chat-summary-bot/internal/market_indicators"
 	"github.com/fachebot/chat-summary-bot/internal/notify"
@@ -59,6 +60,7 @@ func main() {
 
 	// 创建TeleApp
 	app := teleapp.NewApp(svcCtx, c.TelegramApp.ApiId, c.TelegramApp.ApiHash, "data", marketIndicators)
+	app.SetLarkForwarder(lark.NewClient(&c.LarkForward, svcCtx.TransportProxy))
 	user, err := app.Login(options...)
 	if err != nil {
 		logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
