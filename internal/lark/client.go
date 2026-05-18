@@ -206,6 +206,10 @@ func buildTelegramAlertPost(alert *TelegramAlert) postContent {
 
 	content := [][]postNode{
 		{
+			{Tag: "text", Text: bodyText},
+		},
+		{{Tag: "hr"}},
+		{
 			{Tag: "text", Text: "群聊：", Style: []string{"bold"}},
 			{Tag: "text", Text: fmt.Sprintf("%s (%d)", chatTitle, alert.ChatID)},
 		},
@@ -230,15 +234,8 @@ func buildTelegramAlertPost(alert *TelegramAlert) postContent {
 		})
 	}
 
-	content = append(content,
-		[]postNode{{Tag: "hr"}},
-		[]postNode{{Tag: "text", Text: "内容", Style: []string{"bold"}}},
-		[]postNode{{Tag: "text", Text: bodyText}},
-	)
-
 	return postContent{
 		ZhCN: postLocale{
-			Title:   "Telegram 监控命中",
 			Content: content,
 		},
 	}

@@ -69,8 +69,11 @@ func TestForwardTelegramAlertTextOnly(t *testing.T) {
 	if len(recorder.postMessages) != 1 {
 		t.Fatalf("expected 1 captured post message, got %d", len(recorder.postMessages))
 	}
-	if !strings.Contains(recorder.postMessages[0], "\"title\":\"Telegram 监控命中\"") {
-		t.Fatalf("expected alert post to contain title, got %q", recorder.postMessages[0])
+	if strings.Contains(recorder.postMessages[0], "\"title\":") {
+		t.Fatalf("expected alert post to omit title, got %q", recorder.postMessages[0])
+	}
+	if !strings.Contains(recorder.postMessages[0], "\"text\":\"hello from telegram\"") {
+		t.Fatalf("expected alert post to place body text at top, got %q", recorder.postMessages[0])
 	}
 	if !strings.Contains(recorder.postMessages[0], "\"text\":\"群聊：\"") || !strings.Contains(recorder.postMessages[0], "Alpha Group") {
 		t.Fatalf("expected alert post to contain chat section, got %q", recorder.postMessages[0])
@@ -78,8 +81,11 @@ func TestForwardTelegramAlertTextOnly(t *testing.T) {
 	if !strings.Contains(recorder.postMessages[0], "\"href\":\"https://t.me/c/1234567890/") {
 		t.Fatalf("expected alert post to contain telegram message link, got %q", recorder.postMessages[0])
 	}
-	if !strings.Contains(recorder.postMessages[0], "\"tag\":\"hr\"") || !strings.Contains(recorder.postMessages[0], "\"text\":\"内容\"") {
-		t.Fatalf("expected alert post to contain content section separator, got %q", recorder.postMessages[0])
+	if !strings.Contains(recorder.postMessages[0], "\"tag\":\"hr\"") {
+		t.Fatalf("expected alert post to contain separator after top content, got %q", recorder.postMessages[0])
+	}
+	if strings.Contains(recorder.postMessages[0], "\"text\":\"内容\"") {
+		t.Fatalf("expected alert post to remove bottom content label, got %q", recorder.postMessages[0])
 	}
 	if len(recorder.receiveIDs) != 1 || recorder.receiveIDs[0] != "ou_test_user" {
 		t.Fatalf("expected direct message to ou_test_user, got %+v", recorder.receiveIDs)
