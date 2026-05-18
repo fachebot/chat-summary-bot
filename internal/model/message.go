@@ -38,7 +38,7 @@ func (m *MessageModel) Create(ctx context.Context, data *MessageData) (*ent.Mess
 	if err == nil {
 		return existing, nil
 	}
-	if err != nil && !ent.IsNotFound(err) {
+	if !ent.IsNotFound(err) {
 		return nil, err
 	}
 
