@@ -31,6 +31,7 @@ type TeleApp struct {
 	summaryHandler   func(ctx context.Context, chatID int64) error
 	adminUserIds     []int64
 	larkForwarder    *lark.Client
+	processMu        sync.Mutex
 }
 
 func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, marketIndicators *market_indicators.MarketIndicators) *TeleApp {

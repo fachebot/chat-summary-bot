@@ -172,12 +172,28 @@ cp etc/config.yaml.sample etc/config.yaml
 
 Bot 会回复被回复用户的 ID、昵称和用户名。
 
+追加 `-p` 或 `--private` 可将结果私信发送给你：
+
+```
+@bot /getuserid -p
+@bot /getuserid --private
+```
+
 ### `/profile`
 
 AI 性格分析。需要**回复**目标用户的一条消息后发送，Bot 会从数据库中查询该用户的所有聊天记录，通过 LLM 分析性格特征、沟通风格、行为模式等。
 
+> ⚠️ 仅 `AdminUserIds` 白名单中的用户有权使用。
+
 ```
 @bot /profile
+```
+
+追加 `-p` 或 `--private` 可将结果私信发送给你：
+
+```
+@bot /profile -p
+@bot /profile --private
 ```
 
 分析结果格式：
@@ -189,7 +205,7 @@ AI 性格分析。需要**回复**目标用户的一条消息后发送，Bot 会
 📊 基于 128 条聊天记录分析
 ```
 
-> 聊天记录过多时会自动分块处理，再汇总为完整报告。
+> 聊天记录过多时会自动分块处理，再汇总为完整报告。同时 `/sum` 和 `/profile` 同一时间只能处理一个请求，有请求正在处理时会提示稍后再试。
 
 ## 配置说明
 

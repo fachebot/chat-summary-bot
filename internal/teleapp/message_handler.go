@@ -71,6 +71,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	isSummaryCommand := false
 	isGetUserIDCommand := false
 	isHiCommand := false
+	isPrivateReply := false
 
 	if !isGroupChat {
 		if strings.Contains(messageText, "抄底") {
@@ -93,15 +94,25 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			shouldRespond = true
 		}
 
-		if hasMention && strings.HasPrefix(trimmedText, "/getuserid") {
+		bareCmd := trimmedText
+		if fields := strings.Fields(trimmedText); len(fields) > 0 {
+			bareCmd = fields[0]
+			for _, f := range fields[1:] {
+				if f == "-p" || f == "--private" {
+					isPrivateReply = true
+				}
+			}
+		}
+
+		if hasMention && strings.HasPrefix(bareCmd, "/getuserid") {
 			isGetUserIDCommand = true
 		}
 
-		if hasMention && (strings.HasPrefix(trimmedText, "/sum") || strings.HasPrefix(trimmedText, "/summary")) {
+		if hasMention && (strings.HasPrefix(bareCmd, "/sum") || strings.HasPrefix(bareCmd, "/summary")) {
 			isSummaryCommand = true
 		}
 
-		if hasMention && trimmedText == "/profile" {
+		if hasMention && bareCmd == "/profile" {
 			isHiCommand = true
 		}
 	}
@@ -112,7 +123,13 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			logger.Errorf("[TeleApp] 处理 /getuserid 失败: %v", err)
 			replyText = "获取被回复用户 ID 失败，请稍后再试。"
 		}
-		if err := app.sendMessage(ctx, message.ChatId, message.Id, replyText); err != nil {
+		targetChatID := message.ChatId
+		replyToID := message.Id
+		if isPrivateReply {
+			targetChatID = senderID
+			replyToID = 0
+		}
+		if err := app.sendMessage(ctx, targetChatID, replyToID, replyText); err != nil {
 			logger.Errorf("[TeleApp] 发送 /getuserid 结果失败: %v", err)
 		} else {
 			logger.Infof("[TeleApp] 已回复 /getuserid, chat=%d, requester=%d, message=%d", message.ChatId, senderID, message.Id)
@@ -128,9 +145,16 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			}
 		}
 		if isAdmin {
-			logger.Infof("[TeleApp] 用户 %d 在群组 %d 请求手动摘要", senderID, message.ChatId)
-			if err := app.summaryHandler(ctx, message.ChatId); err != nil {
-				logger.Errorf("[TeleApp] 手动摘要失败: %v", err)
+			if !app.processMu.TryLock() {
+				_ = app.sendMessage(ctx, message.ChatId, message.Id, "有一个请求正在处理中，请稍后再试。")
+			} else {
+				logger.Infof("[TeleApp] 用户 %d 在群组 %d 请求手动摘要", senderID, message.ChatId)
+				go func(chatID int64) {
+					defer app.processMu.Unlock()
+					if err := app.summaryHandler(ctx, chatID); err != nil {
+						logger.Errorf("[TeleApp] 手动摘要失败: %v", err)
+					}
+				}(message.ChatId)
 			}
 		} else {
 			logger.Warnf("[TeleApp] 用户 %d 不在白名单中，拒绝手动摘要请求", senderID)
@@ -151,7 +175,25 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	}
 
 	if isHiCommand {
-		go app.handleHiCommand(ctx, message)
+		isAdmin := false
+		for _, adminID := range app.adminUserIds {
+			if senderID == adminID {
+				isAdmin = true
+				break
+			}
+		}
+		if isAdmin {
+			if !app.processMu.TryLock() {
+				_ = app.sendMessage(ctx, message.ChatId, message.Id, "有一个请求正在处理中，请稍后再试。")
+			} else {
+				go func() {
+					defer app.processMu.Unlock()
+					app.handleHiCommand(ctx, message, senderID, isPrivateReply)
+				}()
+			}
+		} else {
+			_ = app.sendMessage(ctx, message.ChatId, message.Id, "你不在白名单中，不能使用该功能。")
+		}
 	}
 
 	if isGroupChat {
@@ -208,10 +250,17 @@ func (app *TeleApp) buildGetUserIDReply(ctx context.Context, message *client.Mes
 }
 
 // handleHiCommand 处理 @机器人 /profile 命令（需回复目标用户的消息）
-func (app *TeleApp) handleHiCommand(ctx context.Context, message *client.Message) {
+func (app *TeleApp) handleHiCommand(ctx context.Context, message *client.Message, senderID int64, isPrivate bool) {
+	targetChatID := message.ChatId
+	replyToID := message.Id
+	if isPrivate {
+		targetChatID = senderID
+		replyToID = 0
+	}
+
 	replyTo, ok := message.ReplyTo.(*client.MessageReplyToMessage)
 	if !ok || replyTo == nil || replyTo.MessageId == 0 {
-		_ = app.sendMessage(ctx, message.ChatId, message.Id, "请先回复目标用户的一条消息，再发送 @机器人 /profile。")
+		_ = app.sendMessage(ctx, targetChatID, replyToID, "请先回复目标用户的一条消息，再发送 @机器人 /profile。")
 		return
 	}
 
@@ -225,27 +274,27 @@ func (app *TeleApp) handleHiCommand(ctx context.Context, message *client.Message
 		MessageId: replyTo.MessageId,
 	})
 	if err != nil {
-		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("获取被回复消息失败: %v", err))
+		_ = app.sendMessage(ctx, targetChatID, replyToID, fmt.Sprintf("获取被回复消息失败: %v", err))
 		return
 	}
 
 	targetID, targetName, _ := app.resolveMessageSender(repliedMessage)
 	if targetID == 0 {
-		_ = app.sendMessage(ctx, message.ChatId, message.Id, "被回复的消息不是普通用户发送。")
+		_ = app.sendMessage(ctx, targetChatID, replyToID, "被回复的消息不是普通用户发送。")
 		return
 	}
 
 	thinking := fmt.Sprintf("🤔 正在分析 %s 的性格，请稍候……", targetName)
-	_ = app.sendMessage(ctx, message.ChatId, message.Id, thinking)
+	_ = app.sendMessage(ctx, targetChatID, replyToID, thinking)
 
 	msgs, err := app.svcCtx.MessageModel.GetBySenderAndChat(ctx, message.ChatId, targetID)
 	if err != nil {
-		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("查询聊天记录失败: %v", err))
+		_ = app.sendMessage(ctx, targetChatID, replyToID, fmt.Sprintf("查询聊天记录失败: %v", err))
 		return
 	}
 
 	if len(msgs) == 0 {
-		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("未找到 %s 的聊天记录。", targetName))
+		_ = app.sendMessage(ctx, targetChatID, replyToID, fmt.Sprintf("未找到 %s 的聊天记录。", targetName))
 		return
 	}
 
@@ -261,12 +310,12 @@ func (app *TeleApp) handleHiCommand(ctx context.Context, message *client.Message
 
 	analysis, err := app.svcCtx.LLMClient.AnalyzePersonality(ctx, chatMsgs)
 	if err != nil {
-		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("性格分析失败: %v", err))
+		_ = app.sendMessage(ctx, targetChatID, replyToID, fmt.Sprintf("性格分析失败: %v", err))
 		return
 	}
 
 	replyText := formatHiReply(targetName, targetID, analysis, len(msgs))
-	_ = app.sendMessage(ctx, message.ChatId, message.Id, replyText)
+	_ = app.sendMessage(ctx, targetChatID, replyToID, replyText)
 }
 
 func formatHiReply(targetName string, targetID int64, analysis string, msgCount int) string {
