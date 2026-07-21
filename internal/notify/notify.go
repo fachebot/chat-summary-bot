@@ -33,7 +33,7 @@ func (n *Notifier) Notify(ctx context.Context, content string, chatID int64) err
 		return nil
 	}
 
-	switch n.config.NotifyMode {
+	switch n.config.GetNotifyMode(chatID) {
 	case "private":
 		return n.notifyPrivate(ctx, content)
 	case "group":

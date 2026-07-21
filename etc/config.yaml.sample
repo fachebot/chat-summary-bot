@@ -25,6 +25,9 @@ Summary:
   NotifyMode: private # "private" / "group" / "both"
   NotifyUserIds: # 私聊通知的目标用户ID列表
     - 7779208645
+  ChatNotifyModes: # 按群聊单独覆盖通知方式，key=群聊ID，value="private"/"group"/"both"；不配置则使用全局 NotifyMode
+    # -1001234567890: group
+    # -1009876543210: both
   RetryTimes: 3 # 总结失败重试次数，默认 3
   RetryInterval: 60 # 重试间隔（秒），默认 60
   Whitelist: # 白名单群组ID列表，设置后只保存和总结白名单群组（与黑名单互斥，优先使用白名单）
