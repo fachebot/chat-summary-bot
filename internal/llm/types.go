@@ -24,12 +24,18 @@ type topicSubItemJSON struct {
 	MessageIDs  []int64 `json:"message_ids"`
 }
 
+// PersonalityTrait 性格分析中的一项特征，包含标签和详细说明
+type PersonalityTrait struct {
+	Trait       string `json:"trait"`       // 特征标签，如"极度理性与思辨型"
+	Explanation string `json:"explanation"` // 详细说明，结合实际聊天内容佐证
+}
+
 // PersonalityProfile 性格分析结构化输出
 type PersonalityProfile struct {
-	Summary            string   `json:"summary"`
-	PersonalityTraits  []string `json:"personality_traits"`
-	CommunicationStyle []string `json:"communication_style"`
-	Interests          []string `json:"interests"`
-	BehaviorPatterns   []string `json:"behavior_patterns"`
-	OverallAssessment  string   `json:"overall_assessment"`
+	Summary            string             `json:"summary"`
+	PersonalityTraits  []PersonalityTrait `json:"personality_traits"`
+	CommunicationStyle []PersonalityTrait `json:"communication_style"`
+	Interests          []PersonalityTrait `json:"interests"`
+	BehaviorPatterns   []PersonalityTrait `json:"behavior_patterns"`
+	OverallAssessment  string             `json:"overall_assessment"`
 }

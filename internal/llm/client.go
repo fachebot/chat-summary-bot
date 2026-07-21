@@ -415,33 +415,56 @@ func (c *Client) SummarizeChat(ctx context.Context, messages []ChatMessage) (str
 	return string(data), nil
 }
 
-const personalitySystemPrompt = `你是一个专业的性格分析师。根据用户提供的聊天记录，分析这个人的性格特征、沟通风格、兴趣爱好、行为模式等。
+const personalitySystemPrompt = `你是一个专业的性格分析师。根据用户提供的聊天记录，详细分析这个人的性格特征、沟通风格、兴趣爱好、行为模式等。
 
-聊天记录格式为每行："[发言者名|消息ID] 消息内容"`
+聊天记录格式为每行："[发言者名|消息ID] 消息内容"
+
+要求：
+- 每条特征必须结合具体聊天内容佐证，说明为什么得出这个结论
+- 每个字段至少输出3条特征（聊天记录极少时除外）
+- 特征标签简洁准确，说明详尽具体
+- 输出不能太简短，要有深度分析`
 
 const personalityJSONHint = `你必须严格按照以下JSON结构输出，不要使用Markdown代码块，不要输出任何额外字段：
 {
   "summary": "简短概括（1-2句话）",
-  "personality_traits": ["性格特征1", "性格特征2"],
-  "communication_style": ["沟通风格1", "沟通风格2"],
-  "interests": ["兴趣1", "兴趣2"],
-  "behavior_patterns": ["行为模式1", "行为模式2"],
-  "overall_assessment": "综合评价（2-3句话）"
+  "personality_traits": [
+    {"trait": "特征标签，如极度理性与思辨型", "explanation": "详细说明为什么这样分析，结合具体聊天内容佐证，如"他的思维高度结构化，倾向于用数据、规则和逻辑模型来解释市场……""},
+    {"trait": "第二个特征标签", "explanation": "详细说明"}
+  ],
+  "communication_style": [
+    {"trait": "沟通风格标签", "explanation": "详细说明"}
+  ],
+  "interests": [
+    {"trait": "兴趣标签", "explanation": "详细说明"}
+  ],
+  "behavior_patterns": [
+    {"trait": "行为模式标签", "explanation": "详细说明"}
+  ],
+  "overall_assessment": "综合评价（3-5句话，全面总结）"
 }`
 
 const personalityMergeJSONHint = `你必须将多段分析合并为一个完整的JSON输出，不要使用Markdown代码块，不要输出任何额外字段。
 合并要求：
 1. 去除重复内容
-2. 保留所有独特见解
+2. 保留所有独特见解，explanation字段合并各段中的相关信息
 3. 保持逻辑连贯
 
 输出结构：
 {
   "summary": "合并后的简短概括",
-  "personality_traits": ["合并后所有性格特征"],
-  "communication_style": ["合并后所有沟通风格"],
-  "interests": ["合并后所有兴趣"],
-  "behavior_patterns": ["合并后所有行为模式"],
+  "personality_traits": [
+    {"trait": "特征标签", "explanation": "合并后的详细说明"}
+  ],
+  "communication_style": [
+    {"trait": "标签", "explanation": "详细说明"}
+  ],
+  "interests": [
+    {"trait": "标签", "explanation": "详细说明"}
+  ],
+  "behavior_patterns": [
+    {"trait": "标签", "explanation": "详细说明"}
+  ],
   "overall_assessment": "合并后的综合评价"
 }`
 
