@@ -71,6 +71,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	isSummaryCommand := false
 	isGetUserIDCommand := false
 	isHiCommand := false
+	isDeleteCommand := false
 	isPrivateReply := false
 
 	if !isGroupChat {
@@ -114,6 +115,10 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 
 		if hasMention && bareCmd == "/profile" {
 			isHiCommand = true
+		}
+
+		if hasMention && bareCmd == "/delete" {
+			isDeleteCommand = true
 		}
 	}
 
@@ -193,6 +198,49 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			}
 		} else {
 			_ = app.sendMessage(ctx, message.ChatId, message.Id, "你不在白名单中，不能使用该功能。")
+		}
+	}
+
+	if isDeleteCommand {
+		isAdmin := false
+		for _, adminID := range app.adminUserIds {
+			if senderID == adminID {
+				isAdmin = true
+				break
+			}
+		}
+		if !isAdmin {
+			_ = app.sendMessage(ctx, message.ChatId, message.Id, "你没有权限使用该命令。")
+		} else {
+			replyTo, ok := message.ReplyTo.(*client.MessageReplyToMessage)
+			if !ok || replyTo == nil || replyTo.MessageId == 0 {
+				_ = app.sendMessage(ctx, message.ChatId, message.Id, "请回复 bot 发送的一条消息后使用 /delete。")
+			} else {
+				repliedMessage, err := app.tdClient.GetMessage(&client.GetMessageRequest{
+					ChatId:    message.ChatId,
+					MessageId: replyTo.MessageId,
+				})
+				if err != nil {
+					_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("获取被回复消息失败: %v", err))
+				} else if repliedMessage.SenderId == nil {
+					_ = app.sendMessage(ctx, message.ChatId, message.Id, "只能删除 bot 发送的消息。")
+				} else if _, ok := repliedMessage.SenderId.(*client.MessageSenderUser); !ok {
+					_ = app.sendMessage(ctx, message.ChatId, message.Id, "只能删除 bot 发送的消息。")
+				} else if repliedMessage.SenderId.(*client.MessageSenderUser).UserId != app.user.Id {
+					_ = app.sendMessage(ctx, message.ChatId, message.Id, "只能删除 bot 发送的消息。")
+				} else {
+					_, err = app.tdClient.DeleteMessages(&client.DeleteMessagesRequest{
+						ChatId:     message.ChatId,
+						MessageIds: []int64{replyTo.MessageId, message.Id},
+						Revoke:     true,
+					})
+					if err != nil {
+						logger.Errorf("[TeleApp] 删除消息失败: %v", err)
+					} else {
+						logger.Infof("[TeleApp] 已删除消息, chat=%d, messages=%v", message.ChatId, []int64{replyTo.MessageId, message.Id})
+					}
+				}
+			}
 		}
 	}
 
