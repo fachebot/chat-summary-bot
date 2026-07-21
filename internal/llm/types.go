@@ -23,3 +23,13 @@ type topicSubItemJSON struct {
 	Description string  `json:"description"`
 	MessageIDs  []int64 `json:"message_ids"`
 }
+
+// PersonalityProfile 性格分析结构化输出
+type PersonalityProfile struct {
+	Summary            string   `json:"summary"`
+	PersonalityTraits  []string `json:"personality_traits"`
+	CommunicationStyle []string `json:"communication_style"`
+	Interests          []string `json:"interests"`
+	BehaviorPatterns   []string `json:"behavior_patterns"`
+	OverallAssessment  string   `json:"overall_assessment"`
+}

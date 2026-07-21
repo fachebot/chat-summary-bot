@@ -308,18 +308,58 @@ func (app *TeleApp) handleHiCommand(ctx context.Context, message *client.Message
 		}
 	}
 
-	analysis, err := app.svcCtx.LLMClient.AnalyzePersonality(ctx, chatMsgs)
+	profile, err := app.svcCtx.LLMClient.AnalyzePersonality(ctx, chatMsgs)
 	if err != nil {
 		_ = app.sendMessage(ctx, targetChatID, replyToID, fmt.Sprintf("性格分析失败: %v", err))
 		return
 	}
 
-	replyText := formatHiReply(targetName, targetID, analysis, len(msgs))
+	replyText := formatHiReply(targetName, targetID, profile, len(msgs))
 	_ = app.sendMessage(ctx, targetChatID, replyToID, replyText)
 }
 
-func formatHiReply(targetName string, targetID int64, analysis string, msgCount int) string {
-	return fmt.Sprintf("🧑 性格分析：%s (ID: %d)\n\n%s\n\n📊 基于 %d 条聊天记录分析", targetName, targetID, analysis, msgCount)
+func formatHiReply(targetName string, targetID int64, profile *llm.PersonalityProfile, msgCount int) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "🧑 性格分析：%s (ID: %d)\n\n", targetName, targetID)
+	fmt.Fprintf(&b, "📋 概况\n%s\n\n", profile.Summary)
+
+	if len(profile.PersonalityTraits) > 0 {
+		fmt.Fprintln(&b, "🔹 性格特征")
+		for _, t := range profile.PersonalityTraits {
+			fmt.Fprintf(&b, "• %s\n", t)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	if len(profile.CommunicationStyle) > 0 {
+		fmt.Fprintln(&b, "💬 沟通风格")
+		for _, s := range profile.CommunicationStyle {
+			fmt.Fprintf(&b, "• %s\n", s)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	if len(profile.Interests) > 0 {
+		fmt.Fprintln(&b, "🎯 兴趣爱好")
+		for _, i := range profile.Interests {
+			fmt.Fprintf(&b, "• %s\n", i)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	if len(profile.BehaviorPatterns) > 0 {
+		fmt.Fprintln(&b, "🔄 行为模式")
+		for _, p := range profile.BehaviorPatterns {
+			fmt.Fprintf(&b, "• %s\n", p)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	fmt.Fprintf(&b, "📝 综合评价\n%s\n\n", profile.OverallAssessment)
+	fmt.Fprintf(&b, "📊 基于 %d 条聊天记录分析", msgCount)
+
+	return b.String()
 }
 
 func isSupportedGroupChat(chat *client.Chat) bool {

@@ -415,93 +415,101 @@ func (c *Client) SummarizeChat(ctx context.Context, messages []ChatMessage) (str
 	return string(data), nil
 }
 
-// callChatCompletion 调用 LLM 进行纯文本补全（非 JSON 格式）
-func (c *Client) callChatCompletion(ctx context.Context, systemPrompt, userPrompt string, maxOutputTokens int) (string, error) {
-	outputLimit := maxOutputTokens
-	if outputLimit <= 0 || outputLimit > c.maxOutputTokens {
-		outputLimit = c.maxOutputTokens
-	}
-	promptTokens := estimateTokens(systemPrompt) + estimateTokens(userPrompt)
-	remainingTokens := c.totalTokens - promptTokens - defaultPromptReserveTokens
-	if remainingTokens < outputLimit {
-		outputLimit = remainingTokens
-	}
-	if outputLimit < minimumOutputTokens {
-		return "", fmt.Errorf("请求 token 预算不足: prompt=%d, context=%d", promptTokens, c.totalTokens)
-	}
-
-	for shrinkAttempt := 0; ; shrinkAttempt++ {
-		req := openai.ChatCompletionRequest{
-			Model: c.config.Model,
-			Messages: []openai.ChatCompletionMessage{
-				{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-				{Role: openai.ChatMessageRoleUser, Content: userPrompt},
-			},
-			Temperature: 0.3,
-			MaxTokens:   outputLimit,
-		}
-
-		resp, err := c.openaiClient.CreateChatCompletion(ctx, req)
-		if err != nil {
-			if isContextLimitError(err) && shrinkAttempt < maxContextLimitShrinkRetry {
-				nextOutputLimit := nextReducedOutputLimit(outputLimit)
-				if nextOutputLimit < outputLimit {
-					logger.Warnf("[LLM] 检测到上下文超限，自动收缩输出预算后重试: %d -> %d", outputLimit, nextOutputLimit)
-					outputLimit = nextOutputLimit
-					continue
-				}
-			}
-			return "", fmt.Errorf("调用 LLM API 失败: %w", err)
-		}
-		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("LLM API 返回空结果")
-		}
-
-		return trimResponseContent(resp.Choices[0].Message.Content), nil
-	}
-}
-
 const personalitySystemPrompt = `你是一个专业的性格分析师。根据用户提供的聊天记录，分析这个人的性格特征、沟通风格、兴趣爱好、行为模式等。
 
-聊天记录格式为每行："[发言者名|消息ID] 消息内容"
+聊天记录格式为每行："[发言者名|消息ID] 消息内容"`
 
-请输出详细但简洁的性格分析报告，包括但不限于：
-1. 性格特征（内向/外向、理性/感性、思维模式等）
-2. 沟通风格（直接/委婉、正式/随意、幽默/严肃等）
-3. 兴趣爱好和关注领域
-4. 行为模式
+const personalityJSONHint = `你必须严格按照以下JSON结构输出，不要使用Markdown代码块，不要输出任何额外字段：
+{
+  "summary": "简短概括（1-2句话）",
+  "personality_traits": ["性格特征1", "性格特征2"],
+  "communication_style": ["沟通风格1", "沟通风格2"],
+  "interests": ["兴趣1", "兴趣2"],
+  "behavior_patterns": ["行为模式1", "行为模式2"],
+  "overall_assessment": "综合评价（2-3句话）"
+}`
 
-不要输出JSON格式，直接输出分析文本。`
-
-const personalityMergePrompt = `以下是同一用户多段聊天记录的性格分析结果。请将它们合并为一份完整、连贯的性格分析报告。
-
-要求：
+const personalityMergeJSONHint = `你必须将多段分析合并为一个完整的JSON输出，不要使用Markdown代码块，不要输出任何额外字段。
+合并要求：
 1. 去除重复内容
 2. 保留所有独特见解
 3. 保持逻辑连贯
-4. 输出完整的最终报告
 
-不要输出JSON格式，直接输出分析文本。`
+输出结构：
+{
+  "summary": "合并后的简短概括",
+  "personality_traits": ["合并后所有性格特征"],
+  "communication_style": ["合并后所有沟通风格"],
+  "interests": ["合并后所有兴趣"],
+  "behavior_patterns": ["合并后所有行为模式"],
+  "overall_assessment": "合并后的综合评价"
+}`
 
-// analyzePersonalitySingle 对单段消息做性格分析
-func (c *Client) analyzePersonalitySingle(ctx context.Context, messages []ChatMessage) (string, error) {
-	chatText := messagesToPromptText(messages)
-	userPrompt := "以下是该用户的聊天记录：\n" + chatText + "\n\n请分析这个人的性格特征。"
-	return c.callChatCompletion(ctx, personalitySystemPrompt, userPrompt, c.maxOutputTokens)
+// requestPersonalityProfile 调用 LLM 获取结构化性格分析
+func (c *Client) requestPersonalityProfile(ctx context.Context, systemPrompt, userPrompt string) (*PersonalityProfile, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	var lastErr error
+	requestMaxOutputTokens := c.maxOutputTokens
+
+	for attempt := 1; attempt <= defaultLLMRetryAttempts; attempt++ {
+		finalUserPrompt := userPrompt
+		if attempt > 1 {
+			finalUserPrompt += "\n\n上一次输出未通过校验，请重新输出，必须返回合法JSON且字段不能为空数组。"
+		}
+
+		raw, err := c.callStructuredChatCompletion(ctx, systemPrompt, finalUserPrompt, requestMaxOutputTokens)
+		if err == nil {
+			var profile PersonalityProfile
+			if parseErr := json.Unmarshal([]byte(raw), &profile); parseErr != nil {
+				lastErr = fmt.Errorf("解析JSON失败: %w", parseErr)
+				logger.Warnf("[LLM] 性格分析第 %d 次输出JSON解析失败: %v", attempt, parseErr)
+				continue
+			}
+			if profile.Summary == "" && len(profile.PersonalityTraits) == 0 {
+				lastErr = fmt.Errorf("输出内容为空")
+				logger.Warnf("[LLM] 性格分析第 %d 次输出内容为空", attempt)
+				continue
+			}
+			return &profile, nil
+		} else {
+			lastErr = err
+			logger.Warnf("[LLM] 性格分析第 %d 次请求失败: %v", attempt, err)
+		}
+
+		if attempt == defaultLLMRetryAttempts || !shouldRetryLLMError(lastErr) {
+			break
+		}
+		if err := sleepWithContext(ctx, time.Duration(attempt)*retryBackoffBase); err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("性格分析失败: %w", lastErr)
 }
 
-// mergePersonalityAnalyses 合并多段性格分析结果
-func (c *Client) mergePersonalityAnalyses(ctx context.Context, analyses []string) (string, error) {
-	input := ""
-	for i, analysis := range analyses {
-		input += fmt.Sprintf("=== 第 %d 段分析 ===\n%s\n\n", i+1, analysis)
+// analyzePersonalitySingle 对单段消息做结构化性格分析
+func (c *Client) analyzePersonalitySingle(ctx context.Context, messages []ChatMessage) (*PersonalityProfile, error) {
+	chatText := messagesToPromptText(messages)
+	systemPrompt := personalitySystemPrompt + "\n\n" + personalityJSONHint
+	userPrompt := "以下是该用户的聊天记录：\n" + chatText + "\n\n请分析这个人的性格特征。"
+	return c.requestPersonalityProfile(ctx, systemPrompt, userPrompt)
+}
+
+// mergePersonalityProfiles 合并多段结构化性格分析结果
+func (c *Client) mergePersonalityProfiles(ctx context.Context, profiles []*PersonalityProfile) (*PersonalityProfile, error) {
+	inputs := make([]string, len(profiles))
+	for i, p := range profiles {
+		data, _ := json.Marshal(p)
+		inputs[i] = fmt.Sprintf("=== 第 %d 段分析 ===\n%s", i+1, string(data))
 	}
-	userPrompt := "以下是需要合并的多段分析结果：\n\n" + input + "\n\n请合并为一份完整的性格分析报告。"
-	return c.callChatCompletion(ctx, personalityMergePrompt, userPrompt, c.maxOutputTokens)
+	userPrompt := "以下是该用户的多段性格分析JSON，请合并为一份完整的性格分析JSON：\n\n" + strings.Join(inputs, "\n\n")
+	return c.requestPersonalityProfile(ctx, personalityMergeJSONHint, userPrompt)
 }
 
 // analyzePersonalityInChunks 将消息分块分析后归并
-func (c *Client) analyzePersonalityInChunks(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (string, error) {
+func (c *Client) analyzePersonalityInChunks(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (*PersonalityProfile, error) {
 	if maxTokensPerChunk <= 0 {
 		maxTokensPerChunk = 1
 	}
@@ -511,31 +519,31 @@ func (c *Client) analyzePersonalityInChunks(ctx context.Context, messages []Chat
 	logger.Infof("[LLM] 聊天记录过长 (%d tokens)，将按 %d tokens/chunk 进行性格分析并归并", tokens, maxTokensPerChunk)
 	chunks := splitMessagesIntoChunks(messages, maxTokensPerChunk)
 
-	analyses := make([]string, 0, len(chunks))
+	profiles := make([]*PersonalityProfile, 0, len(chunks))
 	for i, chunkMsgs := range chunks {
 		logger.Debugf("[LLM] 性格分析处理 chunk %d/%d", i+1, len(chunks))
-		analysis, err := c.analyzePersonalitySingle(ctx, chunkMsgs)
+		profile, err := c.analyzePersonalitySingle(ctx, chunkMsgs)
 		if err != nil {
-			return "", fmt.Errorf("性格分析 chunk %d 失败: %w", i+1, err)
+			return nil, fmt.Errorf("性格分析 chunk %d 失败: %w", i+1, err)
 		}
-		analyses = append(analyses, analysis)
+		profiles = append(profiles, profile)
 	}
 
-	if len(analyses) == 1 {
-		return analyses[0], nil
+	if len(profiles) == 1 {
+		return profiles[0], nil
 	}
 
-	merged, err := c.mergePersonalityAnalyses(ctx, analyses)
+	merged, err := c.mergePersonalityProfiles(ctx, profiles)
 	if err != nil {
-		return "", fmt.Errorf("归并性格分析失败: %w", err)
+		return nil, fmt.Errorf("归并性格分析失败: %w", err)
 	}
 	return merged, nil
 }
 
 // analyzePersonalityAdaptive 自适应路由：消息量小则一次分析，大则分块后归并
-func (c *Client) analyzePersonalityAdaptive(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (string, error) {
+func (c *Client) analyzePersonalityAdaptive(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (*PersonalityProfile, error) {
 	if len(messages) == 0 {
-		return "", nil
+		return nil, nil
 	}
 	if maxTokensPerChunk <= 0 {
 		maxTokensPerChunk = 1
@@ -562,15 +570,15 @@ func (c *Client) analyzePersonalityAdaptive(ctx context.Context, messages []Chat
 			return c.analyzePersonalityInChunks(ctx, messages, nextChunkLimit)
 		}
 	}
-	return "", err
+	return nil, err
 }
 
 // AnalyzePersonality 分析用户在群聊中的性格特征
 // messages 为该用户在当前群聊的所有聊天记录
-// 返回性格分析文本（非 JSON）
-func (c *Client) AnalyzePersonality(ctx context.Context, messages []ChatMessage) (string, error) {
+// 返回结构化性格分析结果
+func (c *Client) AnalyzePersonality(ctx context.Context, messages []ChatMessage) (*PersonalityProfile, error) {
 	if len(messages) == 0 {
-		return "", nil
+		return nil, nil
 	}
 	return c.analyzePersonalityAdaptive(ctx, messages, c.maxInputTokens)
 }
