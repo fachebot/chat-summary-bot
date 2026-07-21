@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fachebot/chat-summary-bot/internal/lark"
+	"github.com/fachebot/chat-summary-bot/internal/llm"
 	"github.com/fachebot/chat-summary-bot/internal/logger"
 
 	"github.com/zelenin/go-tdlib/client"
@@ -69,6 +70,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	shouldRespond := false
 	isSummaryCommand := false
 	isGetUserIDCommand := false
+	isHiCommand := false
 
 	if !isGroupChat {
 		if strings.Contains(messageText, "抄底") {
@@ -97,6 +99,10 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 
 		if hasMention && (strings.HasPrefix(trimmedText, "/sum") || strings.HasPrefix(trimmedText, "/summary")) {
 			isSummaryCommand = true
+		}
+
+		if hasMention && trimmedText == "/profile" {
+			isHiCommand = true
 		}
 	}
 
@@ -142,6 +148,10 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 		} else {
 			logger.Infof("[TeleApp] 已发送抄底指标到 %s", chat.Title)
 		}
+	}
+
+	if isHiCommand {
+		go app.handleHiCommand(ctx, message)
 	}
 
 	if isGroupChat {
@@ -195,6 +205,72 @@ func (app *TeleApp) buildGetUserIDReply(ctx context.Context, message *client.Mes
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+// handleHiCommand 处理 @机器人 /profile 命令（需回复目标用户的消息）
+func (app *TeleApp) handleHiCommand(ctx context.Context, message *client.Message) {
+	replyTo, ok := message.ReplyTo.(*client.MessageReplyToMessage)
+	if !ok || replyTo == nil || replyTo.MessageId == 0 {
+		_ = app.sendMessage(ctx, message.ChatId, message.Id, "请先回复目标用户的一条消息，再发送 @机器人 /profile。")
+		return
+	}
+
+	repliedChatID := replyTo.ChatId
+	if repliedChatID == 0 {
+		repliedChatID = message.ChatId
+	}
+
+	repliedMessage, err := app.tdClient.GetMessage(&client.GetMessageRequest{
+		ChatId:    repliedChatID,
+		MessageId: replyTo.MessageId,
+	})
+	if err != nil {
+		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("获取被回复消息失败: %v", err))
+		return
+	}
+
+	targetID, targetName, _ := app.resolveMessageSender(repliedMessage)
+	if targetID == 0 {
+		_ = app.sendMessage(ctx, message.ChatId, message.Id, "被回复的消息不是普通用户发送。")
+		return
+	}
+
+	thinking := fmt.Sprintf("🤔 正在分析 %s 的性格，请稍候……", targetName)
+	_ = app.sendMessage(ctx, message.ChatId, message.Id, thinking)
+
+	msgs, err := app.svcCtx.MessageModel.GetBySenderAndChat(ctx, message.ChatId, targetID)
+	if err != nil {
+		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("查询聊天记录失败: %v", err))
+		return
+	}
+
+	if len(msgs) == 0 {
+		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("未找到 %s 的聊天记录。", targetName))
+		return
+	}
+
+	chatMsgs := make([]llm.ChatMessage, len(msgs))
+	for i, msg := range msgs {
+		chatMsgs[i] = llm.ChatMessage{
+			MessageID:  msg.MessageID,
+			SenderID:   msg.SenderID,
+			SenderName: msg.SenderName,
+			Text:       msg.Text,
+		}
+	}
+
+	analysis, err := app.svcCtx.LLMClient.AnalyzePersonality(ctx, chatMsgs)
+	if err != nil {
+		_ = app.sendMessage(ctx, message.ChatId, message.Id, fmt.Sprintf("性格分析失败: %v", err))
+		return
+	}
+
+	replyText := formatHiReply(targetName, targetID, analysis, len(msgs))
+	_ = app.sendMessage(ctx, message.ChatId, message.Id, replyText)
+}
+
+func formatHiReply(targetName string, targetID int64, analysis string, msgCount int) string {
+	return fmt.Sprintf("🧑 性格分析：%s (ID: %d)\n\n%s\n\n📊 基于 %d 条聊天记录分析", targetName, targetID, analysis, msgCount)
 }
 
 func isSupportedGroupChat(chat *client.Chat) bool {

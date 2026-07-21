@@ -62,6 +62,7 @@ Telegram 群聊消息摘要 Bot - 使用你的账号，自动记录群聊并生�
 - 🚨 **跨平台告警转发**：支持把指定 Telegram 用户的实时消息转发到 Lark，文本、图片、文件可应用内加急
 - 🔌 **多 LLM 支持**：支持 OpenAI、Azure、DeepSeek、Qwen 等多种 LLM 模型
 - ⚡ **Token 管理**：自动处理 token 超限，智能拆分长文本
+- 🧑 **性格分析**：回复用户消息并发送 `@机器人 /profile`，AI 基于聊天记录分析该用户的性格特征
 
 ## 系统要求
 
@@ -147,6 +148,49 @@ cp etc/config.yaml.sample etc/config.yaml
 ./chat-summary-bot -f etc/config.yaml
 ```
 
+## 命令
+
+在群聊中 `@机器人` 并发送以下命令触发相应功能：
+
+### `/sum` / `/summary`
+
+手动触发群聊摘要，立即生成最近 24 小时的讨论总结。
+
+> ⚠️ 仅 `AdminUserIds` 白名单中的用户有权使用。
+
+```
+@bot /sum
+```
+
+### `/getuserid`
+
+获取目标用户的 Telegram ID。需要**回复**该用户的一条消息后发送：
+
+```
+@bot /getuserid
+```
+
+Bot 会回复被回复用户的 ID、昵称和用户名。
+
+### `/profile`
+
+AI 性格分析。需要**回复**目标用户的一条消息后发送，Bot 会从数据库中查询该用户的所有聊天记录，通过 LLM 分析性格特征、沟通风格、行为模式等。
+
+```
+@bot /profile
+```
+
+分析结果格式：
+```
+🧑 性格分析：张三 (ID: 123456789)
+
+[分析内容...]
+
+📊 基于 128 条聊天记录分析
+```
+
+> 聊天记录过多时会自动分块处理，再汇总为完整报告。
+
 ## 配置说明
 
 ### TelegramApp
@@ -186,6 +230,7 @@ LLM:
   - `group`: 仅群内通知
   - `both`: 两者都通知
 - `NotifyUserIds`: 私信通知的目标用户 ID 列表
+- `ChatNotifyModes`: 按群聊单独覆盖通知方式，key=群聊ID，value=`private`/`group`/`both`；不配置则使用全局 `NotifyMode`
 - `Whitelist`: 白名单群组 ID 列表，设置后只保存和总结白名单群组（与黑名单互斥，优先使用白名单）
 - `Blacklist`: 黑名单群组 ID 列表，设置后不保存和总结黑名单群组（白名单为空时生效）
 
@@ -219,7 +264,8 @@ LLM:
    - 生成每位成员的聊天摘要
    - 保存摘要到数据库
    - 发送通知（私信/群发，由 NotifyMode 控制）
-   - 清理过期消息（保留 RetentionDays + 1 天）
+     - 清理过期消息（保留 RetentionDays + 1 天）
+6. **命令支持**：在群聊中 `@机器人` 可发送 `/sum`、`/profile`、`/getuserid` 等命令，详情见[命令](#命令)章节
 
 ## 注意事项
 

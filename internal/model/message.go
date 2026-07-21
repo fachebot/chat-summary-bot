@@ -267,6 +267,17 @@ func (m *MessageModel) GetLatestMessageIDsByChat(ctx context.Context) (map[int64
 	return latestByChat, nil
 }
 
+// GetBySenderAndChat 查询指定发送者在指定群聊的所有消息
+func (m *MessageModel) GetBySenderAndChat(ctx context.Context, chatID int64, senderID int64) ([]*ent.Message, error) {
+	return m.client.Query().
+		Where(
+			message.ChatIDEQ(chatID),
+			message.SenderIDEQ(senderID),
+		).
+		Order(message.BySentAt()).
+		All(ctx)
+}
+
 // DeleteBefore 删除指定日期之前的消息
 func (m *MessageModel) DeleteBefore(ctx context.Context, cutoffDate time.Time) (int, error) {
 	return m.client.Delete().

@@ -414,3 +414,163 @@ func (c *Client) SummarizeChat(ctx context.Context, messages []ChatMessage) (str
 	}
 	return string(data), nil
 }
+
+// callChatCompletion 调用 LLM 进行纯文本补全（非 JSON 格式）
+func (c *Client) callChatCompletion(ctx context.Context, systemPrompt, userPrompt string, maxOutputTokens int) (string, error) {
+	outputLimit := maxOutputTokens
+	if outputLimit <= 0 || outputLimit > c.maxOutputTokens {
+		outputLimit = c.maxOutputTokens
+	}
+	promptTokens := estimateTokens(systemPrompt) + estimateTokens(userPrompt)
+	remainingTokens := c.totalTokens - promptTokens - defaultPromptReserveTokens
+	if remainingTokens < outputLimit {
+		outputLimit = remainingTokens
+	}
+	if outputLimit < minimumOutputTokens {
+		return "", fmt.Errorf("请求 token 预算不足: prompt=%d, context=%d", promptTokens, c.totalTokens)
+	}
+
+	for shrinkAttempt := 0; ; shrinkAttempt++ {
+		req := openai.ChatCompletionRequest{
+			Model: c.config.Model,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+				{Role: openai.ChatMessageRoleUser, Content: userPrompt},
+			},
+			Temperature: 0.3,
+			MaxTokens:   outputLimit,
+		}
+
+		resp, err := c.openaiClient.CreateChatCompletion(ctx, req)
+		if err != nil {
+			if isContextLimitError(err) && shrinkAttempt < maxContextLimitShrinkRetry {
+				nextOutputLimit := nextReducedOutputLimit(outputLimit)
+				if nextOutputLimit < outputLimit {
+					logger.Warnf("[LLM] 检测到上下文超限，自动收缩输出预算后重试: %d -> %d", outputLimit, nextOutputLimit)
+					outputLimit = nextOutputLimit
+					continue
+				}
+			}
+			return "", fmt.Errorf("调用 LLM API 失败: %w", err)
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("LLM API 返回空结果")
+		}
+
+		return trimResponseContent(resp.Choices[0].Message.Content), nil
+	}
+}
+
+const personalitySystemPrompt = `你是一个专业的性格分析师。根据用户提供的聊天记录，分析这个人的性格特征、沟通风格、兴趣爱好、行为模式等。
+
+聊天记录格式为每行："[发言者名|消息ID] 消息内容"
+
+请输出详细但简洁的性格分析报告，包括但不限于：
+1. 性格特征（内向/外向、理性/感性、思维模式等）
+2. 沟通风格（直接/委婉、正式/随意、幽默/严肃等）
+3. 兴趣爱好和关注领域
+4. 行为模式
+
+不要输出JSON格式，直接输出分析文本。`
+
+const personalityMergePrompt = `以下是同一用户多段聊天记录的性格分析结果。请将它们合并为一份完整、连贯的性格分析报告。
+
+要求：
+1. 去除重复内容
+2. 保留所有独特见解
+3. 保持逻辑连贯
+4. 输出完整的最终报告
+
+不要输出JSON格式，直接输出分析文本。`
+
+// analyzePersonalitySingle 对单段消息做性格分析
+func (c *Client) analyzePersonalitySingle(ctx context.Context, messages []ChatMessage) (string, error) {
+	chatText := messagesToPromptText(messages)
+	userPrompt := "以下是该用户的聊天记录：\n" + chatText + "\n\n请分析这个人的性格特征。"
+	return c.callChatCompletion(ctx, personalitySystemPrompt, userPrompt, c.maxOutputTokens)
+}
+
+// mergePersonalityAnalyses 合并多段性格分析结果
+func (c *Client) mergePersonalityAnalyses(ctx context.Context, analyses []string) (string, error) {
+	input := ""
+	for i, analysis := range analyses {
+		input += fmt.Sprintf("=== 第 %d 段分析 ===\n%s\n\n", i+1, analysis)
+	}
+	userPrompt := "以下是需要合并的多段分析结果：\n\n" + input + "\n\n请合并为一份完整的性格分析报告。"
+	return c.callChatCompletion(ctx, personalityMergePrompt, userPrompt, c.maxOutputTokens)
+}
+
+// analyzePersonalityInChunks 将消息分块分析后归并
+func (c *Client) analyzePersonalityInChunks(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (string, error) {
+	if maxTokensPerChunk <= 0 {
+		maxTokensPerChunk = 1
+	}
+
+	chatText := messagesToPromptText(messages)
+	tokens := estimateTokens(chatText)
+	logger.Infof("[LLM] 聊天记录过长 (%d tokens)，将按 %d tokens/chunk 进行性格分析并归并", tokens, maxTokensPerChunk)
+	chunks := splitMessagesIntoChunks(messages, maxTokensPerChunk)
+
+	analyses := make([]string, 0, len(chunks))
+	for i, chunkMsgs := range chunks {
+		logger.Debugf("[LLM] 性格分析处理 chunk %d/%d", i+1, len(chunks))
+		analysis, err := c.analyzePersonalitySingle(ctx, chunkMsgs)
+		if err != nil {
+			return "", fmt.Errorf("性格分析 chunk %d 失败: %w", i+1, err)
+		}
+		analyses = append(analyses, analysis)
+	}
+
+	if len(analyses) == 1 {
+		return analyses[0], nil
+	}
+
+	merged, err := c.mergePersonalityAnalyses(ctx, analyses)
+	if err != nil {
+		return "", fmt.Errorf("归并性格分析失败: %w", err)
+	}
+	return merged, nil
+}
+
+// analyzePersonalityAdaptive 自适应路由：消息量小则一次分析，大则分块后归并
+func (c *Client) analyzePersonalityAdaptive(ctx context.Context, messages []ChatMessage, maxTokensPerChunk int) (string, error) {
+	if len(messages) == 0 {
+		return "", nil
+	}
+	if maxTokensPerChunk <= 0 {
+		maxTokensPerChunk = 1
+	}
+
+	chatText := messagesToPromptText(messages)
+	tokens := estimateTokens(chatText)
+	if tokens > maxTokensPerChunk {
+		if len(messages) == 1 {
+			return c.analyzePersonalitySingle(ctx, messages)
+		}
+		return c.analyzePersonalityInChunks(ctx, messages, maxTokensPerChunk)
+	}
+
+	result, err := c.analyzePersonalitySingle(ctx, messages)
+	if err == nil {
+		return result, nil
+	}
+
+	if isContextLimitError(err) && len(messages) > 1 {
+		nextChunkLimit := nextReducedChunkLimit(tokens)
+		if nextChunkLimit > 0 {
+			logger.Warnf("[LLM] 单次性格分析命中上下文限制，改用更小 chunk 预算 %d 继续重试: %v", nextChunkLimit, err)
+			return c.analyzePersonalityInChunks(ctx, messages, nextChunkLimit)
+		}
+	}
+	return "", err
+}
+
+// AnalyzePersonality 分析用户在群聊中的性格特征
+// messages 为该用户在当前群聊的所有聊天记录
+// 返回性格分析文本（非 JSON）
+func (c *Client) AnalyzePersonality(ctx context.Context, messages []ChatMessage) (string, error) {
+	if len(messages) == 0 {
+		return "", nil
+	}
+	return c.analyzePersonalityAdaptive(ctx, messages, c.maxInputTokens)
+}
