@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat Summary Bot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <div id="login-view" class="view hidden">
+    <div class="card login-card">
+      <h1>Chat Summary Bot</h1>
+      <p class="subtitle">Telegram 登录</p>
+      <div id="login-form">
+        <div id="step-phone" class="auth-step">
+          <label>手机号码</label>
+          <input type="text" id="phone-input" placeholder="如 +8613800138000" autocomplete="tel">
+          <button onclick="submitPhone()">下一步</button>
+        </div>
+        <div id="step-code" class="auth-step hidden">
+          <label>验证码</label>
+          <input type="text" id="code-input" placeholder="输入 Telegram 验证码">
+          <button onclick="submitCode()">登录</button>
+        </div>
+        <div id="step-password" class="auth-step hidden">
+          <label>两步验证密码</label>
+          <input type="password" id="password-input" placeholder="输入两步验证密码">
+          <button onclick="submitPassword()">确认</button>
+        </div>
+        <div id="step-qr" class="auth-step hidden">
+          <p>请使用 Telegram 扫描二维码登录</p>
+          <div id="qr-link"></div>
+        </div>
+        <div id="auth-error" class="error hidden"></div>
+        <div id="auth-loading" class="loading hidden">处理中...</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="dashboard-view" class="view hidden">
+    <header>
+      <h1>Chat Summary Bot</h1>
+      <nav>
+        <a href="#" class="active" onclick="showTab('overview')">概览</a>
+        <a href="#" onclick="showTab('config')">配置</a>
+      </nav>
+    </header>
+    <main>
+      <div id="tab-overview" class="tab-content">
+        <div class="card">
+          <h2>运行状态</h2>
+          <div id="status-info">
+            <p class="status-ok">✅ Bot 运行中</p>
+          </div>
+          <div id="user-info"></div>
+        </div>
+      </div>
+      <div id="tab-config" class="tab-content hidden">
+        <div class="card">
+          <h2>当前配置</h2>
+          <pre id="config-display"></pre>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const API_BASE = '';
+
+function $(id) { return document.getElementById(id); }
+function show(id) { $(id).classList.remove('hidden'); }
+function hide(id) { $(id).classList.add('hidden'); }
+
+// Auth state
+let authState = null;
+
+async function checkAuthState() {
+  try {
+    const res = await fetch(API_BASE + '/api/auth/state');
+    const data = await res.json();
+    authState = data;
+
+    if (data.ready) {
+      showDashboard();
+      return;
+    }
+
+    showLogin();
+    updateAuthUI(data);
+  } catch (e) {
+    showLogin();
+  }
+}
+
+function updateAuthUI(data) {
+  hide('auth-error');
+  hide('auth-loading');
+
+  switch (data.state) {
+    case 'authorizationStateWaitPhoneNumber':
+      show('step-phone');
+      hide('step-code');
+      hide('step-password');
+      hide('step-qr');
+      break;
+    case 'authorizationStateWaitCode':
+      hide('step-phone');
+      show('step-code');
+      hide('step-password');
+      hide('step-qr');
+      break;
+    case 'authorizationStateWaitPassword':
+      hide('step-phone');
+      hide('step-code');
+      show('step-password');
+      hide('step-qr');
+      break;
+    case 'authorizationStateWaitOtherDeviceConfirmation':
+      hide('step-phone');
+      hide('step-code');
+      hide('step-password');
+      show('step-qr');
+      if (data.link) {
+        $('qr-link').innerHTML = `<p>请在 Telegram 中打开此链接：</p><a href="${data.link}" target="_blank">${data.link}</a>`;
+      }
+      break;
+    default:
+      show('step-phone');
+      hide('step-code');
+      hide('step-password');
+      hide('step-qr');
+  }
+}
+
+async function submitPhone() {
+  const phone = $('phone-input').value.trim();
+  if (!phone) return;
+  show('auth-loading');
+  const res = await fetch(API_BASE + '/api/auth/phone', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({phone_number: phone})
+  });
+  hide('auth-loading');
+  if (!res.ok) {
+    $('auth-error').textContent = '提交失败，请重试';
+    show('auth-error');
+    return;
+  }
+  pollAuthState();
+}
+
+async function submitCode() {
+  const code = $('code-input').value.trim();
+  if (!code) return;
+  show('auth-loading');
+  const res = await fetch(API_BASE + '/api/auth/code', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code: code})
+  });
+  hide('auth-loading');
+  if (!res.ok) {
+    $('auth-error').textContent = '提交失败，请重试';
+    show('auth-error');
+    return;
+  }
+  pollAuthState();
+}
+
+async function submitPassword() {
+  const password = $('password-input').value.trim();
+  if (!password) return;
+  show('auth-loading');
+  const res = await fetch(API_BASE + '/api/auth/password', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: password})
+  });
+  hide('auth-loading');
+  if (!res.ok) {
+    $('auth-error').textContent = '提交失败，请重试';
+    show('auth-error');
+    return;
+  }
+  pollAuthState();
+}
+
+let pollTimer = null;
+
+function pollAuthState() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(API_BASE + '/api/auth/state');
+      const data = await res.json();
+      authState = data;
+      if (data.ready) {
+        showDashboard();
+        return;
+      }
+      updateAuthUI(data);
+      pollAuthState();
+    } catch (e) {
+      pollAuthState();
+    }
+  }, 1000);
+}
+
+function showLogin() {
+  hide('dashboard-view');
+  show('login-view');
+}
+
+function showDashboard() {
+  hide('login-view');
+  show('dashboard-view');
+  showTab('overview');
+  loadDashboard();
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  $('tab-' + name).classList.remove('hidden');
+  event.target.classList.add('active');
+  if (name === 'overview') loadDashboard();
+  if (name === 'config') loadConfig();
+}
+
+async function loadDashboard() {
+  try {
+    const res = await fetch(API_BASE + '/api/status');
+    const data = await res.json();
+    let html = '';
+    if (data.user) {
+      html += `<p><strong>已登录账号：</strong>${data.user.first_name} ${data.user.last_name || ''} (ID: ${data.user.id})</p>`;
+    }
+    if (data.config && data.config.Summary) {
+      html += `<p><strong>总结 Cron：</strong>${data.config.Summary.Cron}</p>`;
+      html += `<p><strong>消息保留天数：</strong>${data.config.Summary.RetentionDays} 天</p>`;
+    }
+    $('user-info').innerHTML = html;
+  } catch (e) {
+    $('user-info').innerHTML = '<p class="error">获取状态失败</p>';
+  }
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch(API_BASE + '/api/config');
+    const data = await res.json();
+    $('config-display').textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    $('config-display').textContent = '获取配置失败';
+  }
+}
+
+// Init
+checkAuthState();
+</script>
+</body>
+</html>

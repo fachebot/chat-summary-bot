@@ -44,6 +44,12 @@ MarketIndicator:
   Whitelist: # 白名单群组ID列表，为空表示所有群组
   Blacklist: # 黑名单群组ID列表
 
+# Web 管理面板配置
+Web:
+  Enable: false # 是否启用 Web 管理面板
+  Port: 8080 # HTTP 端口
+  Token: "" # 管理面板认证 Token，留空不认证
+
 # Telegram -> Lark 实时转发配置
 LarkForward:
   Enable: false # 是否启用指定 Telegram 用户消息实时转发

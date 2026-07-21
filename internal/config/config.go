@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -48,6 +49,12 @@ type MarketIndicator struct {
 	Blacklist []int64 `yaml:"Blacklist"` // 黑名单群组ID列表
 }
 
+type Web struct {
+	Enable bool   `yaml:"Enable"` // 是否启用 Web 管理面板
+	Port   int    `yaml:"Port"`   // HTTP 端口，默认 8080
+	Token  string `yaml:"Token"`  // 管理面板认证 Token，空=不认证
+}
+
 type LarkForward struct {
 	Enable                   bool     `yaml:"Enable"`                   // 是否启用 Telegram -> Lark 实时转发
 	AppID                    string   `yaml:"AppID"`                    // Lark 自建应用 App ID
@@ -65,6 +72,7 @@ type Config struct {
 	Summary         Summary         `yaml:"Summary"`
 	MarketIndicator MarketIndicator `yaml:"MarketIndicator"`
 	LarkForward     LarkForward     `yaml:"LarkForward"`
+	Web             Web             `yaml:"Web"`
 }
 
 func LoadFromFile(filename string) (*Config, error) {
@@ -72,6 +80,9 @@ func LoadFromFile(filename string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 替换环境变量：${VAR} 或 ${VAR:default}
+	data = replaceEnvVars(data)
 
 	var c Config
 	err = yaml.Unmarshal([]byte(data), &c)
@@ -227,6 +238,31 @@ func (l *LarkForward) ShouldMonitorUser(userID int64, username string) bool {
 	}
 
 	return false
+}
+
+// replaceEnvVars 替换 YAML 文本中的 ${VAR} 和 ${VAR:default} 为环境变量值
+func replaceEnvVars(data []byte) []byte {
+	re := regexp.MustCompile(`\$\{([^:}]+)(?::([^}]*))?\}`)
+	return []byte(re.ReplaceAllStringFunc(string(data), func(match string) string {
+		parts := re.FindStringSubmatch(match)
+		name := strings.TrimSpace(parts[1])
+		defaultValue := ""
+		if len(parts) > 2 {
+			defaultValue = parts[2]
+		}
+		if value, ok := os.LookupEnv(name); ok {
+			return value
+		}
+		return defaultValue
+	}))
+}
+
+// GetPort 获取 Web 端口，默认 8080
+func (w *Web) GetPort() int {
+	if w.Port <= 0 {
+		return 8080
+	}
+	return w.Port
 }
 
 func normalizeTelegramUsername(username string) string {

@@ -77,6 +77,14 @@ func (app *TeleApp) SetLarkForwarder(forwarder *lark.Client) {
 	app.larkForwarder = forwarder
 }
 
+func (app *TeleApp) User() *client.User {
+	return app.user
+}
+
+func (app *TeleApp) TdlibParameters() *client.SetTdlibParametersRequest {
+	return app.parameters
+}
+
 func (app *TeleApp) Login(options ...client.Option) (*client.User, error) {
 	if app.user != nil {
 		return app.user, nil
@@ -90,6 +98,31 @@ func (app *TeleApp) Login(options ...client.Option) (*client.User, error) {
 		return nil, err
 	}
 
+	return app.postLogin(tdlibClient)
+}
+
+func (app *TeleApp) LoginAsync(handler client.AuthorizationStateHandler, options ...client.Option) error {
+	if app.user != nil {
+		return nil
+	}
+
+	tdlibClient, err := client.NewClient(handler, options...)
+	if err != nil {
+		return err
+	}
+
+	app.tdClient = tdlibClient
+	return nil
+}
+
+func (app *TeleApp) WaitForAuth() (*client.User, error) {
+	if app.user != nil {
+		return app.user, nil
+	}
+	return app.postLogin(app.tdClient)
+}
+
+func (app *TeleApp) postLogin(tdlibClient *client.Client) (*client.User, error) {
 	me, err := tdlibClient.GetMe()
 	if err != nil {
 		return nil, err

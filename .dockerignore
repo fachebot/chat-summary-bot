@@ -1,0 +1,12 @@
+.git
+.gitignore
+.cursor
+.vscode
+data/
+etc/config.yaml
+logs/
+*.md
+docs/
+chat-summary-bot
+build.sh
+install_deps.sh

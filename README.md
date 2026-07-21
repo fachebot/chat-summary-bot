@@ -151,6 +151,22 @@ ID: 123456789
 
 ---
 
+### 🌐 Web 管理面板
+
+通过浏览器管理 Bot，支持：
+
+- **Telegram 登录** — 在 Web 页面输入手机号和验证码完成登录，无需终端交互
+- **运行状态** — 查看 Bot 在线状态、已登录账号
+- **配置管理** — 查看当前配置文件
+
+```
+访问 http://localhost:8080
+```
+
+> 需在配置中启用 `Web.Enable: true`。设置 `Web.Token` 可添加面板访问密码。
+
+---
+
 ## 适用场景
 
 - 💰 **交易群**：币圈、股票群，快速掌握交易信号和讨论重点
@@ -163,69 +179,58 @@ ID: 123456789
 
 ## 快速开始
 
-### 系统要求
+### Docker 部署（推荐）
 
-- Linux 系统（推荐使用 WSL2）
-- Go 1.24+
-- TDLib 库（Telegram 官方库）
-- SQLite3
+无需安装 Go 和 TDLib，只需 Docker 环境。
 
-### 安装与编译
-
-**使用 WSL2（推荐）：**
+**1. 克隆项目并配置环境变量：**
 
 ```bash
-# 安装所有依赖（包括 Go 和 TDLib）
-chmod +x install_deps.sh
-./install_deps.sh
-
-# 编译项目
-chmod +x build.sh
-./build.sh
+git clone https://github.com/fachebot/chat-summary-bot.git
+cd chat-summary-bot
+cp .env.sample .env
 ```
 
-详细说明请参考 [BUILD_WSL2.md](BUILD_WSL2.md)
+编辑 `.env` 文件，填入 Telegram API 凭证和 LLM API 密钥：
 
-**手动编译：**
-
-```bash
-# 1. 安装 TDLib
-# Ubuntu/Debian
-sudo apt-get install -y build-essential cmake gperf libssl-dev zlib1g-dev libreadline-dev
-git clone https://github.com/tdlib/td.git
-cd td
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . -j$(nproc)
-sudo cmake --install .
-
-# 2. 安装 Go 依赖并编译
-go mod download
-go build -o chat-summary-bot .
+```env
+TELEGRAM_API_ID=你的API_ID
+TELEGRAM_API_HASH=你的API_HASH
+LLM_API_KEY=你的API_KEY
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-flash
 ```
 
-### 配置
+**2. 复制并编辑配置文件：**
 
 ```bash
 cp etc/config.yaml.sample etc/config.yaml
 ```
 
-编辑 `etc/config.yaml`，配置以下内容：
+编辑 `etc/config.yaml` 中的 `Web.Enable` 改为 `true`。
 
-| 配置项 | 说明 |
-|--------|------|
-| `TelegramApp` | Telegram API ID 和 Hash（从 https://my.telegram.org 获取） |
-| `LLM` | LLM API 端点和密钥（支持 OpenAI / DeepSeek / Qwen 等） |
-| `Summary` | 总结 cron 时间、消息保留天数、通知方式 |
-| `LarkForward` | （可选）Lark 转发凭证和监控用户 |
-
-### 运行
+**3. 启动：**
 
 ```bash
+docker compose up -d
+```
+
+**4. 在浏览器中登录 Telegram：**
+
+打开 `http://localhost:8080`，按照页面提示输入手机号和验证码完成登录。
+
+### 手动编译（适用于 WSL2/Linux）
+
+```bash
+# 编译（需先安装 TDLib）
+chmod +x build.sh
+./build.sh
+
+# 运行
 ./chat-summary-bot -f etc/config.yaml
 ```
 
-首次运行需要登录 Telegram，按照提示输入验证码。
+手动编译需提前安装 TDLib，详细步骤请参考 [BUILD_WSL2.md](BUILD_WSL2.md)。
 
 ---
 
@@ -271,6 +276,16 @@ LLM:
 | `Whitelist` | 白名单群组 ID，设置后只保存和总结白名单群组（与黑名单互斥） |
 | `Blacklist` | 黑名单群组 ID，设置后跳过这些群组 |
 | `AdminUserIds` | 有权使用 `/sum` 和 `/profile` 命令的用户 ID 列表 |
+
+### Web
+
+| 字段 | 说明 |
+|------|------|
+| `Enable` | 是否启用 Web 管理面板 |
+| `Port` | HTTP 端口，默认 8080 |
+| `Token` | 面板访问认证 Token，留空不认证 |
+
+> 首次使用时在浏览器打开 `http://localhost:8080`，按页面引导完成 Telegram 登录。
 
 ### LarkForward
 

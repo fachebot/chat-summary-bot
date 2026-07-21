@@ -18,6 +18,7 @@ import (
 	"github.com/fachebot/chat-summary-bot/internal/summarizer"
 	"github.com/fachebot/chat-summary-bot/internal/svc"
 	"github.com/fachebot/chat-summary-bot/internal/teleapp"
+	"github.com/fachebot/chat-summary-bot/internal/web"
 
 	"github.com/zelenin/go-tdlib/client"
 )
@@ -61,12 +62,66 @@ func main() {
 	// 创建TeleApp
 	app := teleapp.NewApp(svcCtx, c.TelegramApp.ApiId, c.TelegramApp.ApiHash, "data", marketIndicators)
 	app.SetLarkForwarder(lark.NewClient(&c.LarkForward, svcCtx.TransportProxy))
-	user, err := app.Login(options...)
-	if err != nil {
-		logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
-	}
-	logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
 
+	var webServer *web.Server
+	var schedulerInstance *scheduler.Scheduler
+
+	if c.Web.Enable {
+		// ---- Web 模式 ----
+		webAuth := web.NewWebAuthorizer(app.TdlibParameters())
+		if err := app.LoginAsync(webAuth, options...); err != nil {
+			logger.Fatalf("[TeleApp] 启动客户端失败, %s", err)
+		}
+
+		webServer = web.NewServer(&c.Web, c, app.Client(), app.User(), webAuth, *configFile)
+		if err := webServer.Start(); err != nil {
+			logger.Fatalf("[Web] 启动管理面板失败, %s", err)
+		}
+
+		logger.Infof("[TeleApp] 等待 Web 面板登录...")
+		go func() {
+			user, err := app.WaitForAuth()
+			if err != nil {
+				logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
+			}
+			logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
+
+			startBotServices(svcCtx, app, c, marketIndicators, user, &schedulerInstance)
+		}()
+	} else {
+		// ---- CLI 模式（现有行为） ----
+		user, err := app.Login(options...)
+		if err != nil {
+			logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
+		}
+		logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
+
+		schedulerInstance = startBotServices(svcCtx, app, c, marketIndicators, user, nil)
+	}
+
+	// 等待程序退出
+	ch := make(chan os.Signal, 2)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	<-ch
+
+	// 优雅关闭
+	logger.Infof("正在关闭服务...")
+	if schedulerInstance != nil {
+		schedulerInstance.Stop()
+	}
+	if webServer != nil {
+		webServer.Stop()
+	}
+	err = app.Close()
+	if err != nil {
+		logger.Infof("[TeleApp] 关闭失败, %v", err)
+	}
+	marketIndicators.Stop()
+	svcCtx.Close()
+	logger.Infof("服务已停止")
+}
+
+func startBotServices(svcCtx *svc.ServiceContext, app *teleapp.TeleApp, c *config.Config, marketIndicators *market_indicators.MarketIndicators, user *client.User, schedulerPtr **scheduler.Scheduler) *scheduler.Scheduler {
 	// 运行市场指标
 	marketIndicators.Start()
 
@@ -98,19 +153,9 @@ func main() {
 
 	app.SetSummaryHandler(schedulerInstance.TriggerSummaryManual, c.Summary.AdminUserIds)
 
-	// 等待程序退出
-	ch := make(chan os.Signal, 2)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	<-ch
-
-	// 优雅关闭
-	logger.Infof("正在关闭服务...")
-	schedulerInstance.Stop()
-	err = app.Close()
-	if err != nil {
-		logger.Infof("[TeleApp] 关闭失败, %v", err)
+	if schedulerPtr != nil {
+		*schedulerPtr = schedulerInstance
 	}
-	marketIndicators.Stop()
-	svcCtx.Close()
-	logger.Infof("服务已停止")
+
+	return schedulerInstance
 }
