@@ -29,17 +29,17 @@ type LLM struct {
 }
 
 type Summary struct {
-	Cron            string            `yaml:"Cron"`            // cron 表达式，如 "0 23 * * *"
-	RetentionDays   int               `yaml:"RetentionDays"`   // 消息保留天数
-	RangeDays       int               `yaml:"RangeDays"`       // 总结天数，1=仅昨天，7=最近7天
-	NotifyMode      string            `yaml:"NotifyMode"`      // 默认通知方式 "private" / "group" / "both"
-	NotifyUserIds   []int64           `yaml:"NotifyUserIds"`   // 私聊通知的目标用户ID列表
-	ChatNotifyModes map[int64]string  `yaml:"ChatNotifyModes"` // 按群聊单独覆盖通知方式，key=群聊ID，value=通知方式
-	RetryTimes      int               `yaml:"RetryTimes"`      // 总结失败重试次数，默认 3
-	RetryInterval   int               `yaml:"RetryInterval"`   // 重试间隔（秒），默认 60
-	Whitelist       []int64           `yaml:"Whitelist"`       // 白名单群组ID列表，设置后只保存和总结白名单群组
-	Blacklist       []int64           `yaml:"Blacklist"`       // 黑名单群组ID列表，设置后不保存和总结黑名单群组
-	AdminUserIds    []int64           `yaml:"AdminUserIds"`    // 手动触发摘要的白名单用户ID列表
+	Cron            string           `yaml:"Cron"`            // cron 表达式，如 "0 23 * * *"
+	RetentionDays   int              `yaml:"RetentionDays"`   // 消息保留天数
+	RangeDays       int              `yaml:"RangeDays"`       // 总结天数，1=仅昨天，7=最近7天
+	NotifyMode      string           `yaml:"NotifyMode"`      // 默认通知方式 "private" / "group" / "both"
+	NotifyUserIds   []int64          `yaml:"NotifyUserIds"`   // 私聊通知的目标用户ID列表
+	ChatNotifyModes map[int64]string `yaml:"ChatNotifyModes"` // 按群聊单独覆盖通知方式，key=群聊ID，value=通知方式
+	RetryTimes      int              `yaml:"RetryTimes"`      // 总结失败重试次数，默认 3
+	RetryInterval   int              `yaml:"RetryInterval"`   // 重试间隔（秒），默认 60
+	Whitelist       []int64          `yaml:"Whitelist"`       // 白名单群组ID列表，设置后只保存和总结白名单群组
+	Blacklist       []int64          `yaml:"Blacklist"`       // 黑名单群组ID列表，设置后不保存和总结黑名单群组
+	AdminUserIds    []int64          `yaml:"AdminUserIds"`    // 手动触发摘要的白名单用户ID列表
 }
 
 type MarketIndicator struct {
@@ -170,9 +170,6 @@ func (c *Config) Validate() error {
 		}
 		if len(c.LarkForward.EffectiveUrgentUserIDs()) == 0 {
 			return fmt.Errorf("LarkForward.UrgentUserIDs 不能为空")
-		}
-		if len(c.LarkForward.MonitorTelegramUserIDs) == 0 && len(c.LarkForward.MonitorTelegramUsernames) == 0 {
-			return fmt.Errorf("LarkForward.MonitorTelegramUserIDs 和 LarkForward.MonitorTelegramUsernames 不能同时为空")
 		}
 
 		switch c.LarkForward.EffectiveUrgentUserIDType() {

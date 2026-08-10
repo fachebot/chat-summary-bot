@@ -373,7 +373,7 @@ func formatHiReply(targetName string, targetID int64, profile *llm.PersonalityPr
 	fmt.Fprintf(&b, "📋 概况\n%s\n\n", profile.Summary)
 
 	if len(profile.PersonalityTraits) > 0 {
-		fmt.Fprintln(&b, "🔹 性格特征\n")
+		fmt.Fprintln(&b, "🔹 性格特征")
 		for _, t := range profile.PersonalityTraits {
 			if t.Explanation != "" {
 				fmt.Fprintf(&b, "   %s：%s\n\n", t.Trait, t.Explanation)
@@ -385,7 +385,7 @@ func formatHiReply(targetName string, targetID int64, profile *llm.PersonalityPr
 	}
 
 	if len(profile.CommunicationStyle) > 0 {
-		fmt.Fprintln(&b, "💬 沟通风格\n")
+		fmt.Fprintln(&b, "💬 沟通风格")
 		for _, s := range profile.CommunicationStyle {
 			if s.Explanation != "" {
 				fmt.Fprintf(&b, "   %s：%s\n\n", s.Trait, s.Explanation)
@@ -397,7 +397,7 @@ func formatHiReply(targetName string, targetID int64, profile *llm.PersonalityPr
 	}
 
 	if len(profile.Interests) > 0 {
-		fmt.Fprintln(&b, "🎯 兴趣爱好和关注领域\n")
+		fmt.Fprintln(&b, "🎯 兴趣爱好和关注领域")
 		for _, i := range profile.Interests {
 			if i.Explanation != "" {
 				fmt.Fprintf(&b, "   %s：%s\n\n", i.Trait, i.Explanation)
@@ -409,7 +409,7 @@ func formatHiReply(targetName string, targetID int64, profile *llm.PersonalityPr
 	}
 
 	if len(profile.BehaviorPatterns) > 0 {
-		fmt.Fprintln(&b, "🔄 行为模式\n")
+		fmt.Fprintln(&b, "🔄 行为模式")
 		for _, p := range profile.BehaviorPatterns {
 			if p.Explanation != "" {
 				fmt.Fprintf(&b, "   %s：%s\n\n", p.Trait, p.Explanation)

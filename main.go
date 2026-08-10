@@ -69,13 +69,13 @@ func main() {
 	if c.Web.Enable {
 		// ---- Web 模式 ----
 		webAuth := web.NewWebAuthorizer(app.TdlibParameters())
-		if err := app.LoginAsync(webAuth, options...); err != nil {
-			logger.Fatalf("[TeleApp] 启动客户端失败, %s", err)
-		}
-
-		webServer = web.NewServer(&c.Web, c, app.Client(), app.User(), webAuth, *configFile)
+		webServer = web.NewServer(&c.Web, c, webAuth)
 		if err := webServer.Start(); err != nil {
 			logger.Fatalf("[Web] 启动管理面板失败, %s", err)
+		}
+
+		if err := app.LoginAsync(webAuth, options...); err != nil {
+			logger.Fatalf("[TeleApp] 启动客户端失败, %s", err)
 		}
 
 		logger.Infof("[TeleApp] 等待 Web 面板登录...")
@@ -84,6 +84,7 @@ func main() {
 			if err != nil {
 				logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
 			}
+			webServer.SetUser(user)
 			logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
 
 			startBotServices(svcCtx, app, c, marketIndicators, user, &schedulerInstance)

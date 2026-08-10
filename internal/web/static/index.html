@@ -16,24 +16,23 @@
         <div id="step-phone" class="auth-step">
           <label>手机号码</label>
           <input type="text" id="phone-input" placeholder="如 +8613800138000" autocomplete="tel">
-          <button onclick="submitPhone()">下一步</button>
+          <button id="phone-submit" onclick="submitPhone()">下一步</button>
         </div>
         <div id="step-code" class="auth-step hidden">
           <label>验证码</label>
           <input type="text" id="code-input" placeholder="输入 Telegram 验证码">
-          <button onclick="submitCode()">登录</button>
+          <button id="code-submit" onclick="submitCode()">登录</button>
         </div>
         <div id="step-password" class="auth-step hidden">
           <label>两步验证密码</label>
           <input type="password" id="password-input" placeholder="输入两步验证密码">
-          <button onclick="submitPassword()">确认</button>
+          <button id="password-submit" onclick="submitPassword()">确认</button>
         </div>
         <div id="step-qr" class="auth-step hidden">
           <p>请使用 Telegram 扫描二维码登录</p>
           <div id="qr-link"></div>
         </div>
         <div id="auth-error" class="error hidden"></div>
-        <div id="auth-loading" class="loading hidden">处理中...</div>
       </div>
     </div>
   </div>
@@ -42,8 +41,8 @@
     <header>
       <h1>Chat Summary Bot</h1>
       <nav>
-        <a href="#" class="active" onclick="showTab('overview')">概览</a>
-        <a href="#" onclick="showTab('config')">配置</a>
+        <a href="#" class="active" onclick="showTab('overview', event)">概览</a>
+        <a href="#" onclick="showTab('config', event)">配置</a>
       </nav>
     </header>
     <main>
@@ -89,14 +88,25 @@ async function checkAuthState() {
 
     showLogin();
     updateAuthUI(data);
+    pollAuthState();
   } catch (e) {
     showLogin();
+    pollAuthState();
   }
 }
 
 function updateAuthUI(data) {
-  hide('auth-error');
-  hide('auth-loading');
+  if (data.error) {
+    $('auth-error').textContent = data.error;
+    show('auth-error');
+  } else {
+    hide('auth-error');
+  }
+
+  // 步骤已推进或有错误时释放 pending，避免按钮一直卡在 loading
+  if (pendingStep && (data.error || stepFromState(data.state) !== pendingStep)) {
+    setStepPending(pendingStep, false);
+  }
 
   switch (data.state) {
     case 'authorizationStateWaitPhoneNumber':
@@ -134,61 +144,111 @@ function updateAuthUI(data) {
   }
 }
 
+function setButtonLoading(id, loading, loadingText) {
+  const btn = $(id);
+  if (!btn) return;
+  if (loading) {
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = loadingText;
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.label) btn.textContent = btn.dataset.label;
+  }
+}
+
+function stepFromState(state) {
+  switch (state) {
+    case 'authorizationStateWaitPhoneNumber': return 'phone';
+    case 'authorizationStateWaitCode': return 'code';
+    case 'authorizationStateWaitPassword': return 'password';
+    default: return null;
+  }
+}
+
+function setStepPending(step, pending) {
+  pendingStep = pending ? step : null;
+  const labels = {phone: '发送中...', code: '登录中...', password: '确认中...'};
+  setButtonLoading(step + '-submit', pending, labels[step] || '处理中...');
+}
+
 async function submitPhone() {
   const phone = $('phone-input').value.trim();
   if (!phone) return;
-  show('auth-loading');
-  const res = await fetch(API_BASE + '/api/auth/phone', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({phone_number: phone})
-  });
-  hide('auth-loading');
-  if (!res.ok) {
-    $('auth-error').textContent = '提交失败，请重试';
+  setStepPending('phone', true);
+  try {
+    const res = await fetch(API_BASE + '/api/auth/phone', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({phone_number: phone})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('auth-error').textContent = data.error || '提交失败，请重试';
+      show('auth-error');
+      setStepPending('phone', false);
+      return;
+    }
+    hide('auth-error');
+  } catch (e) {
+    $('auth-error').textContent = '网络错误，请重试';
     show('auth-error');
-    return;
+    setStepPending('phone', false);
   }
-  pollAuthState();
 }
 
 async function submitCode() {
   const code = $('code-input').value.trim();
   if (!code) return;
-  show('auth-loading');
-  const res = await fetch(API_BASE + '/api/auth/code', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({code: code})
-  });
-  hide('auth-loading');
-  if (!res.ok) {
-    $('auth-error').textContent = '提交失败，请重试';
+  setStepPending('code', true);
+  try {
+    const res = await fetch(API_BASE + '/api/auth/code', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: code})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('auth-error').textContent = data.error || '提交失败，请重试';
+      show('auth-error');
+      setStepPending('code', false);
+      return;
+    }
+    hide('auth-error');
+  } catch (e) {
+    $('auth-error').textContent = '网络错误，请重试';
     show('auth-error');
-    return;
+    setStepPending('code', false);
   }
-  pollAuthState();
 }
 
 async function submitPassword() {
   const password = $('password-input').value.trim();
   if (!password) return;
-  show('auth-loading');
-  const res = await fetch(API_BASE + '/api/auth/password', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({password: password})
-  });
-  hide('auth-loading');
-  if (!res.ok) {
-    $('auth-error').textContent = '提交失败，请重试';
+  setStepPending('password', true);
+  try {
+    const res = await fetch(API_BASE + '/api/auth/password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: password})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('auth-error').textContent = data.error || '提交失败，请重试';
+      show('auth-error');
+      setStepPending('password', false);
+      return;
+    }
+    hide('auth-error');
+  } catch (e) {
+    $('auth-error').textContent = '网络错误，请重试';
     show('auth-error');
-    return;
+    setStepPending('password', false);
   }
-  pollAuthState();
 }
 
 let pollTimer = null;
+let pendingStep = null;
 
 function pollAuthState() {
   if (pollTimer) clearTimeout(pollTimer);
@@ -215,17 +275,18 @@ function showLogin() {
 }
 
 function showDashboard() {
+  pendingStep = null;
   hide('login-view');
   show('dashboard-view');
-  showTab('overview');
+  showTab('overview', null);
   loadDashboard();
 }
 
-function showTab(name) {
+function showTab(name, evt) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('tab-' + name).classList.remove('hidden');
-  event.target.classList.add('active');
+  if (evt && evt.target) evt.target.classList.add('active');
   if (name === 'overview') loadDashboard();
   if (name === 'config') loadConfig();
 }

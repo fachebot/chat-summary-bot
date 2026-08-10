@@ -32,6 +32,7 @@ type TeleApp struct {
 	adminUserIds     []int64
 	larkForwarder    *lark.Client
 	processMu        sync.Mutex
+	authResult       chan error
 }
 
 func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, marketIndicators *market_indicators.MarketIndicators) *TeleApp {
@@ -106,18 +107,28 @@ func (app *TeleApp) LoginAsync(handler client.AuthorizationStateHandler, options
 		return nil
 	}
 
-	tdlibClient, err := client.NewClient(handler, options...)
-	if err != nil {
-		return err
-	}
+	app.authResult = make(chan error, 1)
+	go func() {
+		tdlibClient, err := client.NewClient(handler, options...)
+		if err != nil {
+			app.authResult <- err
+			return
+		}
+		app.tdClient = tdlibClient
+		app.authResult <- nil
+	}()
 
-	app.tdClient = tdlibClient
 	return nil
 }
 
 func (app *TeleApp) WaitForAuth() (*client.User, error) {
 	if app.user != nil {
 		return app.user, nil
+	}
+	if app.authResult != nil {
+		if err := <-app.authResult; err != nil {
+			return nil, err
+		}
 	}
 	return app.postLogin(app.tdClient)
 }
