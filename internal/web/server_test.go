@@ -80,8 +80,10 @@ func TestWithMiddlewareTokenAuth(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/auth/state", s.handleAuthState)
+	mux.HandleFunc("POST /api/auth/token", s.handleAuthToken)
 	handler := s.withMiddleware(mux)
 
+	// /api/status 无 token → 401
 	req := httptest.NewRequest("GET", "/api/status", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -89,6 +91,7 @@ func TestWithMiddlewareTokenAuth(t *testing.T) {
 		t.Errorf("expected 401 without token, got %d", rec.Code)
 	}
 
+	// /api/status 带 token → 200
 	req = httptest.NewRequest("GET", "/api/status", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec = httptest.NewRecorder()
@@ -97,11 +100,45 @@ func TestWithMiddlewareTokenAuth(t *testing.T) {
 		t.Errorf("expected 200 with token, got %d", rec.Code)
 	}
 
+	// /api/auth/state 无 token → 401（Telegram 登录也在面板密码之后）
 	req = httptest.NewRequest("GET", "/api/auth/state", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for auth endpoint without token, got %d", rec.Code)
+	}
+
+	// /api/auth/token 是面板登录入口，不要求 token
+	req = httptest.NewRequest("POST", "/api/auth/token", bytes.NewBufferString(`{"token":"secret"}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 for auth endpoint without token, got %d", rec.Code)
+		t.Errorf("expected 200 for token endpoint without auth header, got %d", rec.Code)
+	}
+}
+
+func TestHandleAuthToken(t *testing.T) {
+	s := &Server{webCfg: &config.Web{Token: "secret"}}
+
+	req := httptest.NewRequest("POST", "/api/auth/token", bytes.NewBufferString(`{"token":"secret"}`))
+	rec := httptest.NewRecorder()
+	s.handleAuthToken(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for correct token, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest("POST", "/api/auth/token", bytes.NewBufferString(`{"token":"wrong"}`))
+	rec = httptest.NewRecorder()
+	s.handleAuthToken(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for wrong token, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest("POST", "/api/auth/token", bytes.NewBufferString(`{"token":""}`))
+	rec = httptest.NewRecorder()
+	s.handleAuthToken(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty token, got %d", rec.Code)
 	}
 }
 

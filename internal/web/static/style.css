@@ -10,7 +10,8 @@ body {
 .view { min-height: 100vh; }
 
 /* Login */
-#login-view {
+#login-view,
+#panel-token-view {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -98,6 +99,20 @@ button:disabled {
 .phone-bar button.link-btn:hover {
   background: transparent;
   text-decoration: underline;
+}
+.panel-token-input {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 15px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  outline: none;
+  box-sizing: border-box;
+  margin-top: 12px;
+}
+.panel-token-input:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22,119,255,.1);
 }
 
 .error { color: #e84444; font-size: 14px; margin-top: 12px; padding: 8px 12px; background: #fff1f0; border-radius: 6px; }

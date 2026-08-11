@@ -8,6 +8,16 @@
 </head>
 <body>
 <div id="app">
+  <div id="panel-token-view" class="view hidden">
+    <div class="card login-card">
+      <h1>Chat Summary Bot</h1>
+      <p class="subtitle">面板访问密码</p>
+      <input type="password" id="panel-token-input" class="panel-token-input" placeholder="输入访问密码" autocomplete="current-password">
+      <button id="panel-token-submit" onclick="submitPanelToken()">进入</button>
+      <div id="panel-token-error" class="error hidden"></div>
+    </div>
+  </div>
+
   <div id="login-view" class="view hidden">
     <div class="card login-card">
       <h1>Chat Summary Bot</h1>
@@ -101,6 +111,64 @@ function $(id) { return document.getElementById(id); }
 function show(id) { $(id).classList.remove('hidden'); }
 function hide(id) { $(id).classList.add('hidden'); }
 
+// 面板访问密码（Web.Token）：所有 API 请求都带 Bearer 头
+let panelToken = localStorage.getItem('panel_token') || '';
+
+// apiFetch 统一附加面板密码头；收到 401 时切换到密码屏
+async function apiFetch(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers);
+  if (panelToken) opts.headers['Authorization'] = 'Bearer ' + panelToken;
+  const res = await fetch(API_BASE + path, opts);
+  if (res.status === 401 && path !== '/api/auth/token') {
+    panelToken = '';
+    localStorage.removeItem('panel_token');
+    if (pollTimer) clearTimeout(pollTimer);
+    showPanelTokenScreen();
+  }
+  return res;
+}
+
+function showPanelTokenScreen() {
+  hide('login-view');
+  hide('dashboard-view');
+  show('panel-token-view');
+  $('panel-token-input').focus();
+}
+
+function hidePanelTokenScreen() {
+  hide('panel-token-view');
+}
+
+async function submitPanelToken() {
+  const token = $('panel-token-input').value.trim();
+  if (!token) return;
+  const btn = $('panel-token-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch(API_BASE + '/api/auth/token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: token})
+    });
+    if (!res.ok) {
+      $('panel-token-error').textContent = '访问密码错误';
+      show('panel-token-error');
+      return;
+    }
+    panelToken = token;
+    localStorage.setItem('panel_token', token);
+    hide('panel-token-error');
+    hidePanelTokenScreen();
+    checkAuthState();
+  } catch (e) {
+    $('panel-token-error').textContent = '网络错误，请重试';
+    show('panel-token-error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // Auth state
 let authState = null;
 let authPhone = '';
@@ -109,7 +177,8 @@ let restartPending = false;
 
 async function checkAuthState() {
   try {
-    const res = await fetch(API_BASE + '/api/auth/state');
+    const res = await apiFetch('/api/auth/state');
+    if (res.status === 401) return;
     const data = await res.json();
     authState = data;
 
@@ -245,7 +314,7 @@ async function submitPhone() {
   if (!phone) return;
   setStepPending('phone', true);
   try {
-    const res = await fetch(API_BASE + '/api/auth/phone', {
+    const res = await apiFetch('/api/auth/phone', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({phone_number: phone})
@@ -294,7 +363,7 @@ async function submitCode() {
   if (!code) return;
   setStepPending('code', true);
   try {
-    const res = await fetch(API_BASE + '/api/auth/code', {
+    const res = await apiFetch('/api/auth/code', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({code: code})
@@ -319,7 +388,7 @@ async function submitPassword() {
   if (!password) return;
   setStepPending('password', true);
   try {
-    const res = await fetch(API_BASE + '/api/auth/password', {
+    const res = await apiFetch('/api/auth/password', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({password: password})
@@ -346,7 +415,8 @@ function pollAuthState() {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
     try {
-      const res = await fetch(API_BASE + '/api/auth/state');
+      const res = await apiFetch('/api/auth/state');
+      if (res.status === 401) return;
       const data = await res.json();
       authState = data;
       if (data.ready) {
@@ -409,7 +479,7 @@ function connLabel(state) {
 
 async function loadDashboard() {
   try {
-    const res = await fetch(API_BASE + '/api/status');
+    const res = await apiFetch('/api/status');
     const data = await res.json();
     let html = '';
     if (data.user) {
@@ -431,7 +501,7 @@ async function loadDashboard() {
 
 async function loadConfig() {
   try {
-    const res = await fetch(API_BASE + '/api/config');
+    const res = await apiFetch('/api/config');
     const data = await res.json();
     $('config-display').textContent = JSON.stringify(data, null, 2);
   } catch (e) {
@@ -497,7 +567,7 @@ function updateProxyType(prefix) {
 
 async function loadProxy(prefix) {
   try {
-    const res = await fetch(API_BASE + '/api/proxy');
+    const res = await apiFetch('/api/proxy');
     const data = await res.json();
     proxyState[prefix] = { password_set: !!data.password_set, secret_set: !!data.secret_set };
     $(prefix + '-enable').checked = !!data.enable;
@@ -540,7 +610,7 @@ async function saveProxy(prefix) {
   const btn = $(prefix + '-form').querySelector('button');
   if (btn) btn.disabled = true;
   try {
-    const res = await fetch(API_BASE + '/api/proxy', {
+    const res = await apiFetch('/api/proxy', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload)
@@ -565,7 +635,7 @@ async function loadProxyStatus(containerId) {
   if (!el) return;
   el.innerHTML = '<p>检测中...</p>';
   try {
-    const res = await fetch(API_BASE + '/api/proxy/status');
+    const res = await apiFetch('/api/proxy/status');
     const data = await res.json();
     let html = '';
 
@@ -609,7 +679,11 @@ function refreshProxyStatus() {
 }
 
 // Init
-checkAuthState();
+if (!panelToken) {
+  showPanelTokenScreen();
+} else {
+  checkAuthState();
+}
 initProxyForm('login-proxy');
 initProxyForm('dashboard-proxy');
 loadProxyStatus('login-proxy-status');

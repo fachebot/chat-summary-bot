@@ -102,6 +102,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /login", s.handleIndex)
 	mux.HandleFunc("GET /api/auth/state", s.handleAuthState)
+	mux.HandleFunc("POST /api/auth/token", s.handleAuthToken)
 	mux.HandleFunc("POST /api/auth/phone", s.handleAuthPhone)
 	mux.HandleFunc("POST /api/auth/code", s.handleAuthCode)
 	mux.HandleFunc("POST /api/auth/password", s.handleAuthPassword)
@@ -166,14 +167,17 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(path, "/api/") {
 			w.Header().Set("Content-Type", "application/json")
 
-			if strings.HasPrefix(path, "/api/auth/") {
-				// 登录相关端点必须可匿名访问，但需限制 POST 频率
-				if r.Method == http.MethodPost && s.authLimiter != nil && !s.authLimiter.Allow(clientIP(r)) {
-					writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
-					return
-				}
-			} else if s.webCfg.Token != "" && r.Header.Get("Authorization") != "Bearer "+s.webCfg.Token {
+			// 面板密码（Web.Token）门禁所有 API；/api/auth/token 是面板登录入口，除外
+			if s.webCfg.Token != "" && path != "/api/auth/token" &&
+				r.Header.Get("Authorization") != "Bearer "+s.webCfg.Token {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				return
+			}
+
+			// 登录相关 POST 端点限流（含面板密码登录 /api/auth/token）
+			if strings.HasPrefix(path, "/api/auth/") && r.Method == http.MethodPost &&
+				s.authLimiter != nil && !s.authLimiter.Allow(clientIP(r)) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 				return
 			}
 
@@ -230,6 +234,32 @@ func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type authTokenRequest struct {
+	Token string `json:"token"`
+}
+
+// handleAuthToken 面板密码登录：校验 Web.Token。
+func (s *Server) handleAuthToken(w http.ResponseWriter, r *http.Request) {
+	if s.webCfg == nil || s.webCfg.Token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is not configured"})
+		return
+	}
+	var req authTokenRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+		return
+	}
+	if req.Token != s.webCfg.Token {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 type authPhoneRequest struct {
