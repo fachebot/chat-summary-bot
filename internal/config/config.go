@@ -10,9 +10,27 @@ import (
 )
 
 type Sock5Proxy struct {
-	Host   string `yaml:"Host"`
-	Port   int32  `yaml:"Port"`
-	Enable bool   `yaml:"Enable"`
+	Enable   bool   `yaml:"Enable"`
+	Type     string `yaml:"Type"` // 代理类型: socks5 / http / mtproto，默认 socks5
+	Host     string `yaml:"Host"`
+	Port     int32  `yaml:"Port"`
+	Username string `yaml:"Username"` // 用户名（可选，socks5/http 认证）
+	Password string `yaml:"Password"` // 密码（可选）
+	Secret   string `yaml:"Secret"`   // MTProto 代理 secret（十六进制，可选）
+}
+
+// ProxyType 返回规范化的代理类型，默认 socks5。
+func (p Sock5Proxy) ProxyType() string {
+	t := strings.TrimSpace(strings.ToLower(p.Type))
+	if t == "" {
+		return "socks5"
+	}
+	return t
+}
+
+// IsSOCKS5 判断是否为 SOCKS5 代理。
+func (p Sock5Proxy) IsSOCKS5() bool {
+	return p.ProxyType() == "socks5"
 }
 
 type TelegramApp struct {
@@ -100,6 +118,21 @@ func LoadFromFile(filename string) (*Config, error) {
 
 // Validate 验证配置的有效性
 func (c *Config) Validate() error {
+	// 验证代理
+	switch c.Sock5Proxy.ProxyType() {
+	case "socks5", "http", "mtproto":
+	default:
+		return fmt.Errorf("Sock5Proxy.Type 必须是 'socks5', 'http' 或 'mtproto'")
+	}
+	if c.Sock5Proxy.Enable {
+		if c.Sock5Proxy.Host == "" {
+			return fmt.Errorf("Sock5Proxy.Host 不能为空（当 Enable 为 true 时）")
+		}
+		if c.Sock5Proxy.Port <= 0 {
+			return fmt.Errorf("Sock5Proxy.Port 必须大于 0（当 Enable 为 true 时）")
+		}
+	}
+
 	// 验证 TelegramApp
 	if c.TelegramApp.ApiId == 0 {
 		return fmt.Errorf("TelegramApp.ApiId 不能为空")
@@ -252,6 +285,84 @@ func replaceEnvVars(data []byte) []byte {
 		}
 		return defaultValue
 	}))
+}
+
+// SaveProxy 将代理配置写回配置文件，仅更新 Sock5Proxy 块，保留其余内容与注释。
+func SaveProxy(filename string, proxy *Sock5Proxy) error {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	newline := "\n"
+	if strings.Contains(content, "\r\n") {
+		newline = "\r\n"
+	}
+
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+
+	// 定位顶层 "Sock5Proxy:" 键（必须位于行首，无缩进）
+	startIdx := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "Sock5Proxy:") {
+			startIdx = i
+			break
+		}
+	}
+
+	block := proxyBlock(proxy)
+
+	var result string
+	if startIdx == -1 {
+		// 文件中没有 Sock5Proxy 块，追加到末尾
+		joined := strings.Join(lines, newline)
+		if joined != "" && !strings.HasSuffix(joined, newline) {
+			joined += newline
+		}
+		result = joined + strings.Join(block, newline) + newline
+	} else {
+		// 删除旧块：缩进的行 + 紧随其后的空行
+		endIdx := startIdx + 1
+		for endIdx < len(lines) {
+			line := lines[endIdx]
+			if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+				endIdx++
+				continue
+			}
+			break
+		}
+
+		newLines := append([]string{}, lines[:startIdx]...)
+		newLines = append(newLines, block...)
+		newLines = append(newLines, lines[endIdx:]...)
+		result = strings.Join(newLines, newline)
+		if !strings.HasSuffix(result, newline) {
+			result += newline
+		}
+	}
+
+	return os.WriteFile(filename, []byte(result), 0644)
+}
+
+// proxyBlock 生成 Sock5Proxy 配置块（2 空格缩进）。
+func proxyBlock(proxy *Sock5Proxy) []string {
+	return []string{
+		"Sock5Proxy:",
+		"  Host: " + yamlQuote(proxy.Host) + " # 代理服务器地址",
+		fmt.Sprintf("  Port: %d # 代理服务器端口", proxy.Port),
+		fmt.Sprintf("  Enable: %t # 是否启用代理", proxy.Enable),
+		"  Type: " + proxy.ProxyType() + " # 代理类型: socks5 / http / mtproto",
+		"  Username: " + yamlQuote(proxy.Username) + " # 代理用户名（可选）",
+		"  Password: " + yamlQuote(proxy.Password) + " # 代理密码（可选）",
+		"  Secret: " + yamlQuote(proxy.Secret) + " # MTProto 代理 secret（可选）",
+	}
+}
+
+// yamlQuote 将字符串包装为 YAML 双引号标量。
+func yamlQuote(s string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+	return `"` + replacer.Replace(s) + `"`
 }
 
 // GetPort 获取 Web 端口，默认 8080

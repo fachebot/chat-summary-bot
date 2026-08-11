@@ -33,7 +33,7 @@ type Client struct {
 
 func NewClient(proxy config.Sock5Proxy) (*Client, error) {
 	builder := surf.NewClient().Builder()
-	if proxy.Enable {
+	if proxy.Enable && proxy.IsSOCKS5() {
 		builder = builder.Proxy(g.String(fmt.Sprintf("socks5://%s:%d", proxy.Host, proxy.Port)))
 	}
 

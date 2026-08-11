@@ -14,6 +14,7 @@ import (
 
 	"github.com/fachebot/chat-summary-bot/internal/config"
 	"github.com/fachebot/chat-summary-bot/internal/logger"
+	"github.com/fachebot/chat-summary-bot/internal/teleapp"
 
 	"github.com/zelenin/go-tdlib/client"
 )
@@ -22,29 +23,49 @@ import (
 var staticFiles embed.FS
 
 const (
-	authRateMax    = 10             // 每窗口内每个 IP 允许的认证请求数
-	authRateWindow = time.Minute    // 限流窗口
-	maxBodyBytes   = 1 << 20        // 请求体大小上限 1MB
+	authRateMax    = 10          // 每窗口内每个 IP 允许的认证请求数
+	authRateWindow = time.Minute // 限流窗口
+	maxBodyBytes   = 1 << 20     // 请求体大小上限 1MB
 )
 
 type Server struct {
 	webCfg      *config.Web
 	appCfg      *config.Config
-	auth        *WebAuthorizer
+	configFile  string
+	app         *teleapp.TeleApp
 	httpSrv     *http.Server
 	authLimiter *authRateLimiter
+	connState   func() string
 
-	userMu sync.RWMutex
-	tdUser *client.User
+	authMu sync.RWMutex
+	auth   *WebAuthorizer
+
+	userMu  sync.RWMutex
+	tdUser  *client.User
+	proxyMu sync.Mutex
+
+	restartMu  sync.Mutex
+	restarting bool
+	authDone   <-chan struct{}
 }
 
-func NewServer(webCfg *config.Web, appCfg *config.Config, auth *WebAuthorizer) *Server {
+func NewServer(webCfg *config.Web, appCfg *config.Config, auth *WebAuthorizer, configFile string, connState func() string, app *teleapp.TeleApp) *Server {
 	return &Server{
 		webCfg:      webCfg,
 		appCfg:      appCfg,
+		configFile:  configFile,
 		auth:        auth,
 		authLimiter: newAuthRateLimiter(),
+		connState:   connState,
+		app:         app,
 	}
+}
+
+// currentAuth 返回当前授权器（可能为 nil）。
+func (s *Server) currentAuth() *WebAuthorizer {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+	return s.auth
 }
 
 func (s *Server) SetUser(user *client.User) {
@@ -66,7 +87,10 @@ func (s *Server) authReady() bool {
 	if s.currentUser() != nil {
 		return true
 	}
-	return s.auth != nil && s.auth.IsReady()
+	if a := s.currentAuth(); a != nil {
+		return a.IsReady()
+	}
+	return false
 }
 
 func (s *Server) Start() error {
@@ -83,6 +107,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/auth/password", s.handleAuthPassword)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	mux.HandleFunc("GET /api/proxy", s.handleProxyGet)
+	mux.HandleFunc("POST /api/proxy", s.handleProxySet)
+	mux.HandleFunc("GET /api/proxy/status", s.handleProxyStatus)
 
 	staticSub, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -109,6 +136,18 @@ func (s *Server) Start() error {
 			logger.Errorf("[Web] HTTP 服务器错误: %v", err)
 		}
 	}()
+
+	// 启动初始登录流程（与修改手机号重启走同一路径）
+	if s.app != nil {
+		done, err := s.app.LoginAsync(s.currentAuth())
+		if err != nil {
+			logger.Errorf("[Web] 启动登录流程失败: %v", err)
+		} else {
+			s.restartMu.Lock()
+			s.authDone = done
+			s.restartMu.Unlock()
+		}
+	}
 
 	return nil
 }
@@ -158,12 +197,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // ---- Auth API ----
 
 func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
-	if s.auth == nil {
+	auth := s.currentAuth()
+	if auth == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"state": "no_authorizer", "ready": false})
 		return
 	}
 
-	state := s.auth.CurrentState()
+	state := auth.CurrentState()
 	stateType := ""
 	if state != nil {
 		stateType = state.AuthorizationStateType()
@@ -174,7 +214,7 @@ func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
 		"ready": s.authReady(),
 	}
 
-	if errMsg := s.auth.LastError(); errMsg != "" {
+	if errMsg := auth.LastError(); errMsg != "" {
 		resp["error"] = errMsg
 	}
 
@@ -182,6 +222,10 @@ func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
 		switch st := state.(type) {
 		case *client.AuthorizationStateWaitOtherDeviceConfirmation:
 			resp["link"] = st.Link
+		case *client.AuthorizationStateWaitCode:
+			if st.CodeInfo != nil && st.CodeInfo.PhoneNumber != "" {
+				resp["phone_number"] = st.CodeInfo.PhoneNumber
+			}
 		}
 	}
 
@@ -193,7 +237,8 @@ type authPhoneRequest struct {
 }
 
 func (s *Server) handleAuthPhone(w http.ResponseWriter, r *http.Request) {
-	if s.auth == nil {
+	auth := s.currentAuth()
+	if auth == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "authorizer not available"})
 		return
 	}
@@ -206,7 +251,14 @@ func (s *Server) handleAuthPhone(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone_number is required"})
 		return
 	}
-	s.auth.SetPhoneNumber(req.PhoneNumber)
+
+	// 若已进入验证码/密码阶段（用户返回后重新提交手机号），需重启登录流程以切换手机号。
+	if st := auth.CurrentState(); st != nil && st.AuthorizationStateType() != client.TypeAuthorizationStateWaitPhoneNumber {
+		s.restartLogin(req.PhoneNumber)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "restart": "true"})
+		return
+	}
+	auth.SetPhoneNumber(req.PhoneNumber)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -215,7 +267,8 @@ type authCodeRequest struct {
 }
 
 func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request) {
-	if s.auth == nil {
+	auth := s.currentAuth()
+	if auth == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "authorizer not available"})
 		return
 	}
@@ -228,7 +281,7 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code is required"})
 		return
 	}
-	s.auth.SetCode(req.Code)
+	auth.SetCode(req.Code)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -237,7 +290,8 @@ type authPasswordRequest struct {
 }
 
 func (s *Server) handleAuthPassword(w http.ResponseWriter, r *http.Request) {
-	if s.auth == nil {
+	auth := s.currentAuth()
+	if auth == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "authorizer not available"})
 		return
 	}
@@ -250,7 +304,7 @@ func (s *Server) handleAuthPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is required"})
 		return
 	}
-	s.auth.SetPassword(req.Password)
+	auth.SetPassword(req.Password)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -260,6 +314,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"auth_ready": s.authReady(),
 		"config":     sanitizedConfig(s.appCfg),
+		"connection": map[string]interface{}{
+			"state": s.connectionState(),
+		},
 	}
 
 	if u := s.currentUser(); u != nil {
@@ -278,6 +335,301 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sanitizedConfig(s.appCfg))
+}
+
+// ---- Proxy API ----
+
+type proxyAPIRequest struct {
+	Enable      bool   `json:"enable"`
+	Type        string `json:"type"`
+	Host        string `json:"host"`
+	Port        int32  `json:"port"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	PasswordSet bool   `json:"password_set"`
+	Secret      string `json:"secret"`
+	SecretSet   bool   `json:"secret_set"`
+}
+
+func (s *Server) handleProxyGet(w http.ResponseWriter, r *http.Request) {
+	s.proxyMu.Lock()
+	var p config.Sock5Proxy
+	if s.appCfg != nil {
+		p = s.appCfg.Sock5Proxy
+	}
+	s.proxyMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"enable":       p.Enable,
+		"type":         p.ProxyType(),
+		"host":         p.Host,
+		"port":         p.Port,
+		"username":     p.Username,
+		"password_set": p.Password != "",
+		"secret_set":   p.Secret != "",
+	})
+}
+
+func (s *Server) handleProxySet(w http.ResponseWriter, r *http.Request) {
+	auth := s.currentAuth()
+	if s.appCfg == nil || auth == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service not ready"})
+		return
+	}
+
+	var req proxyAPIRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	s.proxyMu.Lock()
+	current := s.appCfg.Sock5Proxy
+	s.proxyMu.Unlock()
+
+	cfg := config.Sock5Proxy{
+		Enable:   req.Enable,
+		Type:     req.Type,
+		Host:     strings.TrimSpace(req.Host),
+		Port:     req.Port,
+		Username: req.Username,
+		Password: req.Password,
+		Secret:   req.Secret,
+	}
+	// 密码/secret 留空且原本已设置时，保留旧值
+	if cfg.Password == "" && req.PasswordSet {
+		cfg.Password = current.Password
+	}
+	if cfg.Secret == "" && req.SecretSet {
+		cfg.Secret = current.Secret
+	}
+
+	switch cfg.ProxyType() {
+	case "socks5", "http", "mtproto":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type 必须是 socks5/http/mtproto"})
+		return
+	}
+	if cfg.Enable && (cfg.Host == "" || cfg.Port <= 0) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "启用代理时 host 和 port 必填"})
+		return
+	}
+
+	// 更新内存配置并同步 tdlib（清旧 + 加新）
+	s.proxyMu.Lock()
+	s.appCfg.Sock5Proxy = cfg
+	s.proxyMu.Unlock()
+	auth.SetProxyConfig(cfg)
+
+	if err := auth.SyncProxyNow(); err != nil {
+		logger.Errorf("[Web] 应用代理失败: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "代理应用失败: " + err.Error()})
+		return
+	}
+
+	// 持久化到配置文件，重启后恢复
+	if s.configFile != "" {
+		if err := config.SaveProxy(s.configFile, &cfg); err != nil {
+			logger.Errorf("[Web] 保存代理配置失败: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "代理已应用但保存配置文件失败: " + err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// connectionState 返回最近一次 TDLib 连接状态，未接入时为 ""。
+func (s *Server) connectionState() string {
+	if s.connState != nil {
+		return s.connState()
+	}
+	return ""
+}
+
+// ---- Proxy Status API ----
+
+// proxyPingTimeout 是 pingProxy 的最长等待时间，避免断网时接口长时间阻塞。
+const proxyPingTimeout = 10 * time.Second
+
+// handleProxyStatus 返回代理的连接状态：已配置代理、tdlib 当前代理列表、
+// 连接状态，以及对启用代理（无代理则直连）的实测延迟。
+func (s *Server) handleProxyStatus(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]interface{}{
+		"connection_state": s.connectionState(),
+	}
+
+	// 已配置代理
+	s.proxyMu.Lock()
+	var configured config.Sock5Proxy
+	if s.appCfg != nil {
+		configured = s.appCfg.Sock5Proxy
+	}
+	s.proxyMu.Unlock()
+	resp["configured"] = map[string]interface{}{
+		"enable":       configured.Enable,
+		"type":         configured.ProxyType(),
+		"host":         configured.Host,
+		"port":         configured.Port,
+		"password_set": configured.Password != "",
+	}
+
+	// tdlib 当前代理列表 + 启用的代理
+	var proxies []map[string]interface{}
+	enabledID := int32(0)
+	if c := s.tdlibClient(); c != nil {
+		if list, err := c.GetProxies(); err == nil {
+			for _, p := range list.Proxies {
+				proxies = append(proxies, map[string]interface{}{
+					"id":             p.Id,
+					"server":         p.Server,
+					"port":           p.Port,
+					"is_enabled":     p.IsEnabled,
+					"last_used_date": p.LastUsedDate,
+				})
+				if p.IsEnabled {
+					enabledID = p.Id
+				}
+			}
+		}
+	}
+	if proxies == nil {
+		proxies = []map[string]interface{}{}
+	}
+	resp["proxies"] = proxies
+
+	// 实测连通性：有启用代理则 ping 代理，否则直连
+	resp["ping"] = s.pingProxy(enabledID)
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// pingProxy 调用 tdlib pingProxy，结果受 proxyPingTimeout 限制。
+// proxyID 为 0 时直连 Telegram 服务器（不带代理）。
+func (s *Server) pingProxy(proxyID int32) map[string]interface{} {
+	c := s.tdlibClient()
+	if c == nil {
+		return map[string]interface{}{"ok": false, "error": "tdlib 客户端未就绪"}
+	}
+
+	type result struct {
+		seconds float64
+		err     error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		res, err := c.PingProxy(&client.PingProxyRequest{ProxyId: proxyID})
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
+		ch <- result{seconds: res.Seconds}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return map[string]interface{}{"ok": false, "error": r.err.Error()}
+		}
+		return map[string]interface{}{"ok": true, "seconds": r.seconds}
+	case <-time.After(proxyPingTimeout):
+		return map[string]interface{}{"ok": false, "error": "检测超时"}
+	}
+}
+
+// tdlibClient 返回当前 tdlib 客户端（可能为 nil）。
+func (s *Server) tdlibClient() *client.Client {
+	auth := s.currentAuth()
+	if auth == nil {
+		return nil
+	}
+	return auth.Client()
+}
+
+// ---- Restart Login (修改手机号) ----
+
+// restartLogin 中止当前登录流程并用新手机号重新发起登录。
+// 用于用户在验证码/密码阶段返回修改手机号后重新提交的情况。
+func (s *Server) restartLogin(phone string) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+
+	s.restarting = true
+	logger.Infof("[Web] 重启登录流程，新手机号: %s", phone)
+
+	// 中止当前授权流程：用 TDLib 自带的 destroy 清理本地数据（含持久化的旧 WaitCode），
+	// 避免手动删文件与 TDLib 的 binlog 写入竞争；然后关闭 done 唤醒旧 Handle。
+	// 不要主动调用旧客户端的 Close()——旧 Authorize 循环自己会关闭它。
+	old := s.currentAuth()
+	if old != nil {
+		if c := old.Client(); c != nil {
+			if _, err := c.Destroy(); err != nil {
+				logger.Warnf("[Web] 销毁旧客户端失败: %v", err)
+			} else {
+				logger.Infof("[Web] 已销毁旧客户端，本地数据已清理")
+			}
+		}
+		old.Close()
+	}
+	s.authDone = nil
+
+	// Destroy 清除了本地数据目录，重新创建，避免新客户端 binlog 初始化报错
+	if s.app != nil {
+		teleapp.EnsureTdlibDirs(s.app.TdlibParameters())
+	}
+
+	// 重置更新监听，允许新客户端重新挂载并捕获连接状态
+	if s.app != nil {
+		s.app.ResetUpdates()
+	}
+
+	// 新建授权器并替换
+	newAuth := s.newAuthorizer()
+	s.authMu.Lock()
+	s.auth = newAuth
+	s.authMu.Unlock()
+
+	if s.app != nil {
+		done, err := s.app.LoginAsync(newAuth)
+		if err != nil {
+			logger.Errorf("[Web] 重启登录流程失败: %v", err)
+		}
+		s.authDone = done
+	}
+	// 预先设置新手机号：新客户端到 WaitPhoneNumber 时立即消费
+	newAuth.SetPhoneNumber(phone)
+	logger.Infof("[Web] 重启登录流程已启动")
+}
+
+// newAuthorizer 基于当前配置创建一个新的 WebAuthorizer。
+func (s *Server) newAuthorizer() *WebAuthorizer {
+	var params *client.SetTdlibParametersRequest
+	var onClientReady func(*client.Client)
+	if s.app != nil {
+		params = s.app.TdlibParameters()
+		onClientReady = s.app.StartUpdates
+	}
+	s.proxyMu.Lock()
+	cfg := config.Sock5Proxy{}
+	if s.appCfg != nil {
+		cfg = s.appCfg.Sock5Proxy
+	}
+	s.proxyMu.Unlock()
+	return NewWebAuthorizer(params, &cfg, onClientReady)
+}
+
+// IsRestarting 判断登录流程是否处于"重启中"，供 main 的等待循环判断。
+func (s *Server) IsRestarting() bool {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	return s.restarting
+}
+
+// MarkRestartConsumed 消费重启标记。
+func (s *Server) MarkRestartConsumed() {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	s.restarting = false
 }
 
 // ---- Helpers ----
@@ -309,6 +661,8 @@ func sanitizedConfig(c *config.Config) *config.Config {
 	out.LLM.APIKey = maskSecret(out.LLM.APIKey)
 	out.LarkForward.AppSecret = maskSecret(out.LarkForward.AppSecret)
 	out.Web.Token = maskSecret(out.Web.Token)
+	out.Sock5Proxy.Password = maskSecret(out.Sock5Proxy.Password)
+	out.Sock5Proxy.Secret = maskSecret(out.Sock5Proxy.Secret)
 	return &out
 }
 

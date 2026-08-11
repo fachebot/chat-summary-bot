@@ -76,9 +76,105 @@ button:disabled {
   cursor: not-allowed;
   opacity: .7;
 }
+.phone-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 8px;
+}
+.phone-bar button.link-btn {
+  width: auto;
+  padding: 4px 8px;
+  margin-top: 0;
+  font-size: 13px;
+  font-weight: 500;
+  background: transparent;
+  color: #1677ff;
+  border: none;
+  cursor: pointer;
+}
+.phone-bar button.link-btn:hover {
+  background: transparent;
+  text-decoration: underline;
+}
 
 .error { color: #e84444; font-size: 14px; margin-top: 12px; padding: 8px 12px; background: #fff1f0; border-radius: 6px; }
 .loading { color: #1677ff; font-size: 14px; margin-top: 12px; }
+
+/* Proxy settings */
+.proxy-settings {
+  margin-top: 20px;
+  text-align: left;
+  border-top: 1px solid #eee;
+  padding-top: 12px;
+}
+.proxy-settings summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1677ff;
+}
+.proxy-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+.proxy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.proxy-form label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  text-align: left;
+}
+.proxy-form .proxy-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+.proxy-form input,
+.proxy-form select {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 14px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  box-sizing: border-box;
+  outline: none;
+}
+.proxy-form input:focus,
+.proxy-form select:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22,119,255,.1);
+}
+.proxy-form button {
+  margin-top: 4px;
+}
+.proxy-msg {
+  font-size: 13px;
+  margin-top: 6px;
+}
+.proxy-msg.success { color: #389e0d; }
+.proxy-msg.error { color: #e84444; }
+
+/* Connection status */
+.conn-ok { color: #389e0d; font-weight: 600; }
+.conn-warn { color: #1677ff; font-weight: 600; }
+.conn-bad { color: #e84444; font-weight: 600; }
+#proxy-status button {
+  width: auto;
+  padding: 6px 14px;
+  margin-top: 12px;
+  font-size: 13px;
+}
 
 /* Dashboard */
 header {

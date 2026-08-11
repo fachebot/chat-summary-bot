@@ -24,7 +24,7 @@ type Client struct {
 // NewClient 创建新的 Coinank API 客户端
 func NewClient(proxy config.Sock5Proxy) (*Client, error) {
 	builder := surf.NewClient().Builder()
-	if proxy.Enable {
+	if proxy.Enable && proxy.IsSOCKS5() {
 		builder = builder.Proxy(g.String(fmt.Sprintf("socks5://%s:%d", proxy.Host, proxy.Port)))
 	}
 	httpClient := builder.

@@ -1,8 +1,12 @@
-# 代理服务器配置
+# 代理服务器配置（也可在 Web 登录页/仪表盘「代理」页配置并写回本文件）
 Sock5Proxy:
+  Enable: true # 是否启用代理
+  Type: socks5 # 代理类型: socks5 / http / mtproto，默认 socks5
   Host: 127.0.0.1 # 代理服务器地址
   Port: 1080 # 代理服务器端口
-  Enable: true # 是否启用代理
+  Username: "" # 代理用户名（可选，socks5/http 认证）
+  Password: "" # 代理密码（可选）
+  Secret: "" # MTProto 代理 secret（可选）
 
 # 电报App配置
 TelegramApp:

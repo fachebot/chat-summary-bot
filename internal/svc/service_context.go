@@ -47,9 +47,9 @@ func NewServiceContext(c *config.Config) *ServiceContext {
 		logger.Fatalf("创建数据库Schema失败, %v", err)
 	}
 
-	// 创建SOCKS5代理
+	// 创建SOCKS5代理（仅 socks5 类型对 HTTP 客户端生效）
 	var transportProxy *http.Transport
-	if c.Sock5Proxy.Enable {
+	if c.Sock5Proxy.Enable && c.Sock5Proxy.IsSOCKS5() {
 		socks5Proxy := fmt.Sprintf("%s:%d", c.Sock5Proxy.Host, c.Sock5Proxy.Port)
 		dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, proxy.Direct)
 		if err != nil {

@@ -19,6 +19,10 @@
           <button id="phone-submit" onclick="submitPhone()">下一步</button>
         </div>
         <div id="step-code" class="auth-step hidden">
+          <div class="phone-bar">
+            <span>手机号：<span id="code-phone"></span></span>
+            <button type="button" class="link-btn" onclick="backToPhone()">修改手机号</button>
+          </div>
           <label>验证码</label>
           <input type="text" id="code-input" placeholder="输入 Telegram 验证码">
           <button id="code-submit" onclick="submitCode()">登录</button>
@@ -33,6 +37,11 @@
           <div id="qr-link"></div>
         </div>
         <div id="auth-error" class="error hidden"></div>
+        <details class="proxy-settings">
+          <summary>代理设置</summary>
+          <div id="login-proxy-status"></div>
+          <div id="login-proxy-form"></div>
+        </details>
       </div>
     </div>
   </div>
@@ -43,6 +52,7 @@
       <nav>
         <a href="#" class="active" onclick="showTab('overview', event)">概览</a>
         <a href="#" onclick="showTab('config', event)">配置</a>
+        <a href="#" onclick="showTab('proxy', event)">代理</a>
       </nav>
     </header>
     <main>
@@ -54,11 +64,30 @@
           </div>
           <div id="user-info"></div>
         </div>
+        <div class="card">
+          <h2>网络连接状态</h2>
+          <div id="conn-info">
+            <p>获取中...</p>
+          </div>
+        </div>
       </div>
       <div id="tab-config" class="tab-content hidden">
         <div class="card">
           <h2>当前配置</h2>
           <pre id="config-display"></pre>
+        </div>
+      </div>
+      <div id="tab-proxy" class="tab-content hidden">
+        <div class="card">
+          <h2>代理连接状态</h2>
+          <div id="proxy-status">
+            <p>检测中...</p>
+          </div>
+        </div>
+        <div class="card">
+          <h2>代理设置</h2>
+          <p class="subtitle">保存后立即应用到 Telegram 连接，并写回配置文件。</p>
+          <div id="dashboard-proxy-form"></div>
         </div>
       </div>
     </main>
@@ -74,6 +103,9 @@ function hide(id) { $(id).classList.add('hidden'); }
 
 // Auth state
 let authState = null;
+let authPhone = '';
+let manualPhoneStep = false;
+let restartPending = false;
 
 async function checkAuthState() {
   try {
@@ -96,17 +128,30 @@ async function checkAuthState() {
 }
 
 function updateAuthUI(data) {
+  // 新流程到达 WaitCode → 结束重启等待。
+  // 注意：不能依赖 data.phone_number 与 authPhone 严格相等（TDLib 返回的手机号
+  // 可能缺失或格式不同，如无 + 号），只要重启后出现 WaitCode 即为新流程已就绪。
+  if (restartPending && data.state === 'authorizationStateWaitCode') {
+    restartPending = false;
+    submitTimedOut = false;
+  }
+
+  // 步骤已推进或有错误时释放 pending，避免按钮一直卡在 loading；重启等待期间不释放
+  if (pendingStep && (data.error || (!restartPending && stepFromState(data.state) !== pendingStep))) {
+    setStepPending(pendingStep, false);
+  }
+
   if (data.error) {
     $('auth-error').textContent = data.error;
     show('auth-error');
-  } else {
+    submitTimedOut = false;
+  } else if (!pendingStep && !submitTimedOut) {
     hide('auth-error');
   }
+  // 其余情况（提交中或已触发超时提示）保留当前显示
 
-  // 步骤已推进或有错误时释放 pending，避免按钮一直卡在 loading
-  if (pendingStep && (data.error || stepFromState(data.state) !== pendingStep)) {
-    setStepPending(pendingStep, false);
-  }
+  // 用户手动回到手机号编辑界面时，不根据后端状态切换步骤
+  if (manualPhoneStep) return;
 
   switch (data.state) {
     case 'authorizationStateWaitPhoneNumber':
@@ -116,6 +161,9 @@ function updateAuthUI(data) {
       hide('step-qr');
       break;
     case 'authorizationStateWaitCode':
+      // 重启 POST 完成时后端已换到新授权器，轮询读到的 WaitCode 只会是新流程的；
+      // 旧的残留 WaitCode 在 POST 期间被 manualPhoneStep 守卫挡住，无需再按手机号过滤。
+      $('code-phone').textContent = data.phone_number || authPhone || '';
       hide('step-phone');
       show('step-code');
       hide('step-password');
@@ -166,10 +214,30 @@ function stepFromState(state) {
   }
 }
 
+const SUBMIT_TIMEOUT_MS = 15000;
+const RESTART_TIMEOUT_MS = 45000;
+let submitTimeout = null;
+let submitTimedOut = false;
+
+function armSubmitTimeout(ms) {
+  if (submitTimeout) clearTimeout(submitTimeout);
+  submitTimeout = setTimeout(() => {
+    submitTimedOut = true;
+    $('auth-error').textContent = '连接超时，请检查网络或代理设置';
+    show('auth-error');
+    if (pendingStep) setStepPending(pendingStep, false);
+  }, ms);
+}
+
 function setStepPending(step, pending) {
+  if (submitTimeout) { clearTimeout(submitTimeout); submitTimeout = null; }
   pendingStep = pending ? step : null;
   const labels = {phone: '发送中...', code: '登录中...', password: '确认中...'};
   setButtonLoading(step + '-submit', pending, labels[step] || '处理中...');
+  if (pending) {
+    submitTimedOut = false;
+    armSubmitTimeout(SUBMIT_TIMEOUT_MS);
+  }
 }
 
 async function submitPhone() {
@@ -189,12 +257,36 @@ async function submitPhone() {
       setStepPending('phone', false);
       return;
     }
+    authPhone = phone;
+    manualPhoneStep = false;
+    restartPending = !!data.restart;
+    if (restartPending) {
+      // 重启需重建客户端并重新连接，可能较慢，延长超时避免误报
+      armSubmitTimeout(RESTART_TIMEOUT_MS);
+    }
     hide('auth-error');
   } catch (e) {
     $('auth-error').textContent = '网络错误，请重试';
     show('auth-error');
     setStepPending('phone', false);
   }
+}
+
+function backToPhone() {
+  manualPhoneStep = true;
+  restartPending = false;
+  if (pendingStep) setStepPending(pendingStep, false);
+  else submitTimedOut = false;
+  hide('auth-error');
+  // 刷新页面后 authPhone 为空，用当前展示的手机号预填
+  if (!$('phone-input').value.trim()) {
+    $('phone-input').value = $('code-phone').textContent || authPhone || '';
+  }
+  show('step-phone');
+  hide('step-code');
+  hide('step-password');
+  hide('step-qr');
+  $('phone-input').focus();
 }
 
 async function submitCode() {
@@ -270,6 +362,7 @@ function pollAuthState() {
 }
 
 function showLogin() {
+  stopConnPoll();
   hide('dashboard-view');
   show('login-view');
 }
@@ -282,13 +375,36 @@ function showDashboard() {
   loadDashboard();
 }
 
+let connTimer = null;
+function startConnPoll() {
+  if (connTimer) clearInterval(connTimer);
+  connTimer = setInterval(loadDashboard, 5000);
+}
+function stopConnPoll() {
+  if (connTimer) { clearInterval(connTimer); connTimer = null; }
+}
+
 function showTab(name, evt) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('tab-' + name).classList.remove('hidden');
   if (evt && evt.target) evt.target.classList.add('active');
-  if (name === 'overview') loadDashboard();
-  if (name === 'config') loadConfig();
+  if (name === 'overview') { loadDashboard(); startConnPoll(); }
+  if (name === 'config') { loadConfig(); stopConnPoll(); }
+  if (name === 'proxy') { loadProxy('dashboard-proxy'); loadProxyStatus('proxy-status'); stopConnPoll(); }
+}
+
+const CONN_LABELS = {
+  'connectionStateReady': ['已连接', 'ok'],
+  'connectionStateConnecting': ['连接中...', 'warn'],
+  'connectionStateConnectingToProxy': ['正在连接代理...', 'warn'],
+  'connectionStateUpdating': ['正在同步...', 'warn'],
+  'connectionStateWaitingForNetwork': ['等待网络', 'bad']
+};
+function connLabel(state) {
+  const e = CONN_LABELS[state];
+  if (e) return e;
+  return [state || '未知', 'bad'];
 }
 
 async function loadDashboard() {
@@ -304,6 +420,10 @@ async function loadDashboard() {
       html += `<p><strong>消息保留天数：</strong>${data.config.Summary.RetentionDays} 天</p>`;
     }
     $('user-info').innerHTML = html;
+    if (data.connection) {
+      const [label, cls] = connLabel(data.connection.state);
+      $('conn-info').innerHTML = `<p class="conn-${cls}">${label}</p>`;
+    }
   } catch (e) {
     $('user-info').innerHTML = '<p class="error">获取状态失败</p>';
   }
@@ -319,8 +439,186 @@ async function loadConfig() {
   }
 }
 
+// ---- Proxy settings ----
+
+let proxyState = {};
+
+function proxyFormHTML(prefix) {
+  return `
+    <label class="proxy-check"><input type="checkbox" id="${prefix}-enable"> 启用代理</label>
+    <div class="proxy-field">
+      <label>类型</label>
+      <select id="${prefix}-type" onchange="updateProxyType('${prefix}')">
+        <option value="socks5">SOCKS5</option>
+        <option value="http">HTTP</option>
+        <option value="mtproto">MTProto</option>
+      </select>
+    </div>
+    <div class="proxy-field">
+      <label>服务器</label>
+      <input type="text" id="${prefix}-host" placeholder="如 127.0.0.1">
+    </div>
+    <div class="proxy-field">
+      <label>端口</label>
+      <input type="number" id="${prefix}-port" placeholder="如 1080">
+    </div>
+    <div id="${prefix}-group-auth" class="proxy-field">
+      <label>用户名（可选）</label>
+      <input type="text" id="${prefix}-username" placeholder="代理认证用户名">
+      <label>密码（可选）</label>
+      <input type="password" id="${prefix}-password" placeholder="留空保持不变">
+    </div>
+    <div id="${prefix}-group-secret" class="proxy-field hidden">
+      <label>MTProto Secret</label>
+      <input type="text" id="${prefix}-secret" placeholder="MTProto secret（十六进制）">
+    </div>
+    <button onclick="saveProxy('${prefix}')">保存并应用</button>
+    <div id="${prefix}-msg" class="proxy-msg"></div>
+  `;
+}
+
+function setProxyMsg(prefix, msg, isError) {
+  const el = $(prefix + '-msg');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'proxy-msg' + (isError ? ' error' : ' success');
+}
+
+function updateProxyType(prefix) {
+  const isMt = $(prefix + '-type').value === 'mtproto';
+  if (isMt) {
+    show(prefix + '-group-secret');
+    hide(prefix + '-group-auth');
+  } else {
+    hide(prefix + '-group-secret');
+    show(prefix + '-group-auth');
+  }
+}
+
+async function loadProxy(prefix) {
+  try {
+    const res = await fetch(API_BASE + '/api/proxy');
+    const data = await res.json();
+    proxyState[prefix] = { password_set: !!data.password_set, secret_set: !!data.secret_set };
+    $(prefix + '-enable').checked = !!data.enable;
+    $(prefix + '-type').value = data.type || 'socks5';
+    $(prefix + '-host').value = data.host || '';
+    $(prefix + '-port').value = data.port || '';
+    $(prefix + '-username').value = data.username || '';
+    $(prefix + '-password').value = '';
+    $(prefix + '-secret').value = '';
+    updateProxyType(prefix);
+  } catch (e) {
+    setProxyMsg(prefix, '获取代理配置失败', true);
+  }
+}
+
+function initProxyForm(prefix) {
+  const el = $(prefix + '-form');
+  if (!el || el.dataset.ready) return;
+  el.innerHTML = proxyFormHTML(prefix);
+  el.dataset.ready = '1';
+  loadProxy(prefix);
+}
+
+async function saveProxy(prefix) {
+  const st = proxyState[prefix] || {};
+  const password = $(prefix + '-password').value;
+  const secret = $(prefix + '-secret').value;
+  const payload = {
+    enable: $(prefix + '-enable').checked,
+    type: $(prefix + '-type').value,
+    host: $(prefix + '-host').value.trim(),
+    port: parseInt($(prefix + '-port').value, 10) || 0,
+    username: $(prefix + '-username').value,
+    password: password,
+    password_set: password === '' && !!st.password_set,
+    secret: secret,
+    secret_set: secret === '' && !!st.secret_set
+  };
+
+  const btn = $(prefix + '-form').querySelector('button');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API_BASE + '/api/proxy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setProxyMsg(prefix, data.error || '保存失败', true);
+      return;
+    }
+    if (password !== '') st.password_set = true;
+    if (secret !== '') st.secret_set = true;
+    setProxyMsg(prefix, '代理已保存并应用', false);
+  } catch (e) {
+    setProxyMsg(prefix, '网络错误，请重试', true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadProxyStatus(containerId) {
+  const el = $(containerId);
+  if (!el) return;
+  el.innerHTML = '<p>检测中...</p>';
+  try {
+    const res = await fetch(API_BASE + '/api/proxy/status');
+    const data = await res.json();
+    let html = '';
+
+    const [label, cls] = connLabel(data.connection_state);
+    html += `<p>连接状态：<span class="conn-${cls}">${label}</span></p>`;
+
+    const proxies = data.proxies || [];
+    const enabled = proxies.find(p => p.is_enabled);
+    if (enabled) {
+      html += `<p>启用代理：${enabled.server}:${enabled.port}</p>`;
+    } else if (data.configured && data.configured.enable) {
+      html += `<p>启用代理：已配置 ${data.configured.host}:${data.configured.port}，但 tdlib 中未启用</p>`;
+    } else {
+      html += `<p>启用代理：无（直连）</p>`;
+    }
+
+    const lastUsed = proxies.map(p => p.last_used_date).filter(v => v > 0);
+    if (lastUsed.length) {
+      const t = new Date(Math.max(...lastUsed) * 1000);
+      html += `<p>最近使用：${t.toLocaleString()}</p>`;
+    }
+
+    if (data.ping) {
+      if (data.ping.ok) {
+        const ms = Math.round(data.ping.seconds * 1000);
+        html += `<p>代理延迟：<span class="conn-ok">${ms} ms</span></p>`;
+      } else {
+        html += `<p>代理延迟：<span class="conn-bad">无法连通</span>${data.ping.error ? `（${data.ping.error}）` : ''}</p>`;
+      }
+    }
+
+    html += `<button onclick="loadProxyStatus('${containerId}')">重新检测</button>`;
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<p class="error">获取代理状态失败</p><button onclick="loadProxyStatus('${containerId}')">重新检测</button>`;
+  }
+}
+
+function refreshProxyStatus() {
+  loadProxyStatus('proxy-status');
+}
+
 // Init
 checkAuthState();
+initProxyForm('login-proxy');
+initProxyForm('dashboard-proxy');
+loadProxyStatus('login-proxy-status');
+const loginProxyDetails = document.querySelector('.proxy-settings');
+if (loginProxyDetails) {
+  loginProxyDetails.addEventListener('toggle', () => {
+    if (loginProxyDetails.open) loadProxyStatus('login-proxy-status');
+  });
+}
 </script>
 </body>
 </html>

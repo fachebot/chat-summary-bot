@@ -48,17 +48,6 @@ func main() {
 	// 创建市场指标
 	marketIndicators := market_indicators.New(svcCtx)
 
-	// 运行Telegram App
-	options := make([]client.Option, 0)
-	if c.Sock5Proxy.Enable {
-		options = append(options, client.WithProxy(&client.AddProxyRequest{
-			Server: c.Sock5Proxy.Host,
-			Port:   c.Sock5Proxy.Port,
-			Enable: c.Sock5Proxy.Enable,
-			Type:   &client.ProxyTypeSocks5{},
-		}))
-	}
-
 	// 创建TeleApp
 	app := teleapp.NewApp(svcCtx, c.TelegramApp.ApiId, c.TelegramApp.ApiHash, "data", marketIndicators)
 	app.SetLarkForwarder(lark.NewClient(&c.LarkForward, svcCtx.TransportProxy))
@@ -68,29 +57,37 @@ func main() {
 
 	if c.Web.Enable {
 		// ---- Web 模式 ----
-		webAuth := web.NewWebAuthorizer(app.TdlibParameters())
-		webServer = web.NewServer(&c.Web, c, webAuth)
+		// 代理在 WebAuthorizer.Handle 中同步（启动时清空 tdlib 旧代理并按配置重建），
+		// Web 面板保存的新代理也会立即同步，因此无需通过 options 传入
+		webAuth := web.NewWebAuthorizer(app.TdlibParameters(), &c.Sock5Proxy, app.StartUpdates)
+		webServer = web.NewServer(&c.Web, c, webAuth, *configFile, app.ConnectionState, app)
 		if err := webServer.Start(); err != nil {
 			logger.Fatalf("[Web] 启动管理面板失败, %s", err)
 		}
 
-		if err := app.LoginAsync(webAuth, options...); err != nil {
-			logger.Fatalf("[TeleApp] 启动客户端失败, %s", err)
-		}
-
 		logger.Infof("[TeleApp] 等待 Web 面板登录...")
 		go func() {
-			user, err := app.WaitForAuth()
-			if err != nil {
-				logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
-			}
-			webServer.SetUser(user)
-			logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
+			for {
+				user, err := app.WaitForAuth()
+				// 修改手机号触发重启：webServer 已重新发起登录，继续等待
+				if webServer.IsRestarting() {
+					webServer.MarkRestartConsumed()
+					continue
+				}
+				if err != nil {
+					logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
+				}
+				webServer.SetUser(user)
+				logger.Infof("[TeleApp] 用户 <%s %s>(%d) 登录成功", user.FirstName, user.LastName, user.Id)
 
-			startBotServices(svcCtx, app, c, marketIndicators, user, &schedulerInstance)
+				startBotServices(svcCtx, app, c, marketIndicators, user, &schedulerInstance)
+				break
+			}
 		}()
 	} else {
 		// ---- CLI 模式（现有行为） ----
+		// 每次启动清除 tdlib 中所有代理，然后按配置文件重建
+		options := []client.Option{teleapp.ProxyOption(&c.Sock5Proxy)}
 		user, err := app.Login(options...)
 		if err != nil {
 			logger.Fatalf("[TeleApp] 用户登录失败, %s", err)
