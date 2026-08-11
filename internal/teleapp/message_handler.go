@@ -75,6 +75,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	isStartCommand := false
 	isHelpCommand := false
 	isPrivateReply := false
+	hasMention := false
 
 	if !isGroupChat {
 		if strings.Contains(messageText, "抄底") {
@@ -95,7 +96,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 		if botUsername != "" {
 			mentionPattern = "@" + botUsername
 		}
-		hasMention := strings.Contains(strings.ToLower(messageText), mentionPattern)
+		hasMention = strings.Contains(strings.ToLower(messageText), mentionPattern)
 
 		trimmedText := strings.TrimSpace(messageText)
 		if hasMention {
@@ -162,14 +163,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	}
 
 	if isSummaryCommand && app.summaryHandler != nil {
-		isAdmin := false
-		for _, adminID := range app.adminUserIds {
-			if senderID == adminID {
-				isAdmin = true
-				break
-			}
-		}
-		if isAdmin {
+		if app.isAdminForChat(message.ChatId, senderID) {
 			if !app.processMu.TryLock() {
 				_ = app.sendMessage(ctx, message.ChatId, message.Id, "有一个请求正在处理中，请稍后再试。")
 			} else {
@@ -200,14 +194,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	}
 
 	if isHiCommand {
-		isAdmin := false
-		for _, adminID := range app.adminUserIds {
-			if senderID == adminID {
-				isAdmin = true
-				break
-			}
-		}
-		if isAdmin {
+		if app.isAdminForChat(message.ChatId, senderID) {
 			if !app.processMu.TryLock() {
 				_ = app.sendMessage(ctx, message.ChatId, message.Id, "有一个请求正在处理中，请稍后再试。")
 			} else {
@@ -222,14 +209,7 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	}
 
 	if isDeleteCommand {
-		isAdmin := false
-		for _, adminID := range app.adminUserIds {
-			if senderID == adminID {
-				isAdmin = true
-				break
-			}
-		}
-		if !isAdmin {
+		if !app.isAdminForChat(message.ChatId, senderID) {
 			_ = app.sendMessage(ctx, message.ChatId, message.Id, "你没有权限使用该命令。")
 		} else {
 			replyTo, ok := message.ReplyTo.(*client.MessageReplyToMessage)
@@ -276,6 +256,16 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 		}
 	}
 
+	// 未识别的消息：私聊每次都提示；群聊需明确 @ 才提示
+	if !shouldRespond && !isSummaryCommand && !isGetUserIDCommand && !isHiCommand &&
+		!isDeleteCommand && !isStartCommand && !isHelpCommand {
+		if !isGroupChat {
+			_ = app.sendMessage(ctx, message.ChatId, message.Id, "👋 你好！发送 /start 查看介绍，发送 /help 查看可用命令。")
+		} else if hasMention {
+			_ = app.sendMessage(ctx, message.ChatId, message.Id, "🤔 你好！在群里 @我 发送 /help 查看可用命令。")
+		}
+	}
+
 	if isGroupChat {
 		saved, err := app.saveGroupTextMessage(ctx, message, true)
 		if err != nil {
@@ -286,6 +276,31 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 			logger.Debugf("[TeleApp] 群组 %d 在白名单/黑名单中被过滤，跳过保存", message.ChatId)
 		}
 	}
+}
+
+// isGroupAdmin 查询群管理员列表，判断用户是否为该群管理员。
+func (app *TeleApp) isGroupAdmin(chatID, userID int64) bool {
+	admins, err := app.tdClient.GetChatAdministrators(&client.GetChatAdministratorsRequest{ChatId: chatID})
+	if err != nil {
+		logger.Warnf("[TeleApp] 获取群管理员失败 chat=%d: %v", chatID, err)
+		return false
+	}
+	for _, a := range admins.Administrators {
+		if a.UserId == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// isAdminForChat 判断用户是否有权使用管理员命令：配置文件管理员 或 当前群管理员。
+func (app *TeleApp) isAdminForChat(chatID, senderID int64) bool {
+	for _, adminID := range app.adminUserIds {
+		if adminID == senderID {
+			return true
+		}
+	}
+	return app.isGroupAdmin(chatID, senderID)
 }
 
 func (app *TeleApp) buildGetUserIDReply(ctx context.Context, message *client.Message) (string, error) {
