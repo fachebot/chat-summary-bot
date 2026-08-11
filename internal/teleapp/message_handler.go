@@ -72,11 +72,23 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	isGetUserIDCommand := false
 	isHiCommand := false
 	isDeleteCommand := false
+	isStartCommand := false
+	isHelpCommand := false
 	isPrivateReply := false
 
 	if !isGroupChat {
 		if strings.Contains(messageText, "抄底") {
 			shouldRespond = true
+		}
+		// 私聊可直接使用 /start、/help，无需 @
+		fields := strings.Fields(strings.TrimSpace(messageText))
+		if len(fields) > 0 {
+			switch fields[0] {
+			case "/start":
+				isStartCommand = true
+			case "/help":
+				isHelpCommand = true
+			}
 		}
 	} else {
 		mentionPattern := app.user.FirstName
@@ -119,6 +131,14 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 
 		if hasMention && bareCmd == "/delete" {
 			isDeleteCommand = true
+		}
+
+		if hasMention && bareCmd == "/start" {
+			isStartCommand = true
+		}
+
+		if hasMention && bareCmd == "/help" {
+			isHelpCommand = true
 		}
 	}
 
@@ -241,6 +261,18 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 					}
 				}
 			}
+		}
+	}
+
+	if isStartCommand {
+		if err := app.sendMessage(ctx, message.ChatId, message.Id, buildStartText()); err != nil {
+			logger.Errorf("[TeleApp] 发送自我介绍失败: %v", err)
+		}
+	}
+
+	if isHelpCommand {
+		if err := app.sendMessage(ctx, message.ChatId, message.Id, buildHelpText()); err != nil {
+			logger.Errorf("[TeleApp] 发送命令说明失败: %v", err)
 		}
 	}
 
@@ -745,4 +777,31 @@ func (app *TeleApp) downloadTelegramFile(ctx context.Context, file *client.File)
 		return "", fmt.Errorf("telegram file download incomplete, file_id=%d", file.Id)
 	}
 	return downloaded.Local.Path, nil
+}
+
+// buildStartText 返回机器人自我介绍。
+func buildStartText() string {
+	return "👋 你好，我是 Chat Summary Bot！\n\n" +
+		"我会自动记录群聊消息，并提供：\n" +
+		"• 📝 AI 群聊摘要\n" +
+		"• 🧑 成员性格画像\n" +
+		"• 📊 BTC 市场指标\n" +
+		"• 🚨 跨平台告警转发\n\n" +
+		"在群聊中 @我 发送 /help 查看命令说明。"
+}
+
+// buildHelpText 返回命令使用说明。
+func buildHelpText() string {
+	return "🤖 Chat Summary Bot 命令说明\n\n" +
+		"📊 BTC 指标\n" +
+		"  @我 抄底          发送最新 BTC 抄底指标\n\n" +
+		"🔍 用户信息\n" +
+		"  @我 /getuserid    回复目标用户后发送，获取其 ID/昵称（可加 -p 私发）\n\n" +
+		"📝 群聊摘要\n" +
+		"  @我 /sum          手动生成最近 24 小时摘要（仅管理员）\n\n" +
+		"🧑 性格分析\n" +
+		"  @我 /profile      回复目标用户后发送，分析其性格（仅管理员，可加 -p 私发）\n\n" +
+		"🗑️ 删除消息\n" +
+		"  @我 /delete       回复 bot 发送的消息后发送，删除该消息（仅管理员）\n\n" +
+		"💡 群聊中使用请先 @我；私聊中可直接发送 /start 或 /help。"
 }
