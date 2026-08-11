@@ -265,13 +265,13 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 	}
 
 	if isStartCommand {
-		if err := app.sendMessage(ctx, message.ChatId, message.Id, buildStartText()); err != nil {
+		if err := app.sendMessage(ctx, message.ChatId, message.Id, app.buildStartText()); err != nil {
 			logger.Errorf("[TeleApp] 发送自我介绍失败: %v", err)
 		}
 	}
 
 	if isHelpCommand {
-		if err := app.sendMessage(ctx, message.ChatId, message.Id, buildHelpText()); err != nil {
+		if err := app.sendMessage(ctx, message.ChatId, message.Id, app.buildHelpText()); err != nil {
 			logger.Errorf("[TeleApp] 发送命令说明失败: %v", err)
 		}
 	}
@@ -779,10 +779,22 @@ func (app *TeleApp) downloadTelegramFile(ctx context.Context, file *client.File)
 	return downloaded.Local.Path, nil
 }
 
+// botDisplayName 返回 bot 用户的 Telegram 显示名（FirstName + LastName）。
+func (app *TeleApp) botDisplayName() string {
+	if app.user == nil {
+		return "Chat Summary Bot"
+	}
+	name := strings.TrimSpace(strings.Join([]string{app.user.FirstName, app.user.LastName}, " "))
+	if name == "" {
+		return "Chat Summary Bot"
+	}
+	return name
+}
+
 // buildStartText 返回机器人自我介绍。
-func buildStartText() string {
-	return "👋 你好，我是 Chat Summary Bot！\n\n" +
-		"我会自动记录群聊消息，并提供：\n" +
+func (app *TeleApp) buildStartText() string {
+	return fmt.Sprintf("👋 你好，我是 %s！\n\n", app.botDisplayName()) +
+		"拉我进群，我会自动记录群聊消息，并提供：\n" +
 		"• 📝 AI 群聊摘要\n" +
 		"• 🧑 成员性格画像\n" +
 		"• 📊 BTC 市场指标\n" +
@@ -791,8 +803,8 @@ func buildStartText() string {
 }
 
 // buildHelpText 返回命令使用说明。
-func buildHelpText() string {
-	return "🤖 Chat Summary Bot 命令说明\n\n" +
+func (app *TeleApp) buildHelpText() string {
+	return fmt.Sprintf("🤖 %s 命令说明\n\n", app.botDisplayName()) +
 		"📊 BTC 指标\n" +
 		"  @我 抄底          发送最新 BTC 抄底指标\n\n" +
 		"🔍 用户信息\n" +
