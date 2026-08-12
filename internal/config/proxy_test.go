@@ -171,3 +171,91 @@ func TestSaveProxyAppendsWhenMissing(t *testing.T) {
 		t.Errorf("existing content lost")
 	}
 }
+
+func TestSaveChatNotifyModesUpdatesBlock(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	content := `Summary:
+  Cron: "0 0 * * *"
+  RetryTimes: 3
+  ChatNotifyModes: # 按群聊单独覆盖通知方式
+    # -1001234567890: group
+  AdminUserIds:
+    - 1
+TelegramApp:
+  ApiId: 1
+`
+	if err := os.WriteFile(f, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	modes := map[int64]string{1001: "group", 1002: "both"}
+	if err := SaveChatNotifyModes(f, modes); err != nil {
+		t.Fatalf("SaveChatNotifyModes: %v", err)
+	}
+
+	data, _ := os.ReadFile(f)
+	out := string(data)
+
+	// 其它内容与注释保留
+	for _, want := range []string{`Cron: "0 0 * * *"`, "RetryTimes: 3", "AdminUserIds:", "ApiId: 1", "# 按群聊单独覆盖通知方式"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lost content: %q", want)
+		}
+	}
+	// 新条目
+	if !strings.Contains(out, "    1001: group") || !strings.Contains(out, "    1002: both") {
+		t.Errorf("notify entries not written: %s", out)
+	}
+	// 旧注释条目被替换
+	if strings.Contains(out, "# -1001234567890") {
+		t.Errorf("old commented entry not removed")
+	}
+}
+
+func TestSaveChatNotifyModesEmpty(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	content := "Summary:\n  Cron: x\n  ChatNotifyModes:\n    -100: group\n  RetryTimes: 3\n"
+	if err := os.WriteFile(f, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveChatNotifyModes(f, map[int64]string{}); err != nil {
+		t.Fatalf("SaveChatNotifyModes: %v", err)
+	}
+
+	data, _ := os.ReadFile(f)
+	out := string(data)
+	if strings.Contains(out, "-100: group") {
+		t.Errorf("old entry not removed")
+	}
+	if !strings.Contains(out, "ChatNotifyModes:") {
+		t.Errorf("ChatNotifyModes key missing")
+	}
+	if !strings.Contains(out, "RetryTimes: 3") {
+		t.Errorf("sibling content lost")
+	}
+}
+
+func TestSaveChatNotifyModesAppendsWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	content := "Summary:\n  Cron: x\n  RetryTimes: 3\nTelegramApp:\n  ApiId: 1\n"
+	if err := os.WriteFile(f, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveChatNotifyModes(f, map[int64]string{5: "private"}); err != nil {
+		t.Fatalf("SaveChatNotifyModes: %v", err)
+	}
+
+	data, _ := os.ReadFile(f)
+	out := string(data)
+	if !strings.Contains(out, "ChatNotifyModes:") || !strings.Contains(out, "    5: private") {
+		t.Errorf("block not appended: %s", out)
+	}
+	if !strings.Contains(out, "TelegramApp:") {
+		t.Errorf("existing content lost")
+	}
+}

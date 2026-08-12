@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,7 @@ type Server struct {
 	userMu  sync.RWMutex
 	tdUser  *client.User
 	proxyMu sync.Mutex
+	cfgMu   sync.Mutex
 
 	restartMu  sync.Mutex
 	restarting bool
@@ -111,6 +113,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/proxy", s.handleProxyGet)
 	mux.HandleFunc("POST /api/proxy", s.handleProxySet)
 	mux.HandleFunc("GET /api/proxy/status", s.handleProxyStatus)
+	mux.HandleFunc("GET /api/chats", s.handleChatsList)
+	mux.HandleFunc("GET /api/chats/{id}/summaries", s.handleChatSummaries)
+	mux.HandleFunc("GET /api/chats/{id}/summary-dates", s.handleChatSummaryDates)
+	mux.HandleFunc("POST /api/chats/{id}/notify-mode", s.handleChatNotifyMode)
 
 	staticSub, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -574,6 +580,204 @@ func (s *Server) tdlibClient() *client.Client {
 		return nil
 	}
 	return auth.Client()
+}
+
+// ---- Chats API ----
+
+// notifyModeFor 返回指定群聊的生效通知方式。
+func (s *Server) notifyModeFor(chatID int64) string {
+	if s.appCfg == nil {
+		return ""
+	}
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.appCfg.Summary.GetNotifyMode(chatID)
+}
+
+func parseChatID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid chat id"})
+		return 0, false
+	}
+	return id, true
+}
+
+// handleChatsList 返回群聊列表（分页）。
+func (s *Server) handleChatsList(w http.ResponseWriter, r *http.Request) {
+	if s.app == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service not ready"})
+		return
+	}
+
+	page, pageSize := 1, 20
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := r.URL.Query().Get("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			pageSize = n
+		}
+	}
+
+	chats, err := s.app.ListGroupChats()
+	if err != nil {
+		logger.Errorf("[Web] 获取群聊列表失败: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "获取群聊列表失败"})
+		return
+	}
+
+	total := len(chats)
+	start, end := pageRange(total, page, pageSize)
+
+	items := make([]map[string]interface{}, 0, end-start)
+	for _, c := range chats[start:end] {
+		items = append(items, map[string]interface{}{
+			"id":          c.ID,
+			"title":       c.Title,
+			"notify_mode": s.notifyModeFor(c.ID),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"chats":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// pageRange 计算分页切片区间 [start, end)。
+func pageRange(total, page, pageSize int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
+// handleChatSummaries 返回指定群聊指定日期的摘要。
+func (s *Server) handleChatSummaries(w http.ResponseWriter, r *http.Request) {
+	if s.app == nil || s.app.SummaryModel() == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service not ready"})
+		return
+	}
+	chatID, ok := parseChatID(w, r)
+	if !ok {
+		return
+	}
+	dateStr := r.URL.Query().Get("date")
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "date 格式应为 YYYY-MM-DD"})
+		return
+	}
+
+	items, err := s.app.SummaryModel().GetByDateAndChat(r.Context(), chatID, date)
+	if err != nil {
+		logger.Errorf("[Web] 查询摘要失败 chat=%d date=%s: %v", chatID, dateStr, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询摘要失败"})
+		return
+	}
+
+	list := make([]map[string]interface{}, 0, len(items))
+	for _, it := range items {
+		list = append(list, map[string]interface{}{
+			"sender_name": it.SenderName,
+			"content":     it.Content,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"chat_id": chatID,
+		"date":    dateStr,
+		"items":   list,
+	})
+}
+
+// handleChatSummaryDates 返回指定群聊有摘要的日期列表。
+func (s *Server) handleChatSummaryDates(w http.ResponseWriter, r *http.Request) {
+	if s.app == nil || s.app.SummaryModel() == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service not ready"})
+		return
+	}
+	chatID, ok := parseChatID(w, r)
+	if !ok {
+		return
+	}
+	dates, err := s.app.SummaryModel().GetDailySummaryDates(r.Context(), chatID)
+	if err != nil {
+		logger.Errorf("[Web] 查询摘要日期失败 chat=%d: %v", chatID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询摘要日期失败"})
+		return
+	}
+	dateStrs := make([]string, 0, len(dates))
+	for _, d := range dates {
+		dateStrs = append(dateStrs, d.Format("2006-01-02"))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"dates": dateStrs})
+}
+
+// handleChatNotifyMode 设置指定群聊的通知方式（写入 Config.Summary.ChatNotifyModes）。
+func (s *Server) handleChatNotifyMode(w http.ResponseWriter, r *http.Request) {
+	if s.appCfg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "service not ready"})
+		return
+	}
+	chatID, ok := parseChatID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	switch req.Mode {
+	case "private", "group", "both", "":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode 必须是 private/group/both 或空"})
+		return
+	}
+
+	s.cfgMu.Lock()
+	if s.appCfg.Summary.ChatNotifyModes == nil {
+		s.appCfg.Summary.ChatNotifyModes = make(map[int64]string)
+	}
+	if req.Mode == "" {
+		delete(s.appCfg.Summary.ChatNotifyModes, chatID)
+	} else {
+		s.appCfg.Summary.ChatNotifyModes[chatID] = req.Mode
+	}
+	modes := make(map[int64]string, len(s.appCfg.Summary.ChatNotifyModes))
+	for k, v := range s.appCfg.Summary.ChatNotifyModes {
+		modes[k] = v
+	}
+	effective := s.appCfg.Summary.GetNotifyMode(chatID)
+	s.cfgMu.Unlock()
+
+	if s.configFile != "" {
+		if err := config.SaveChatNotifyModes(s.configFile, modes); err != nil {
+			logger.Errorf("[Web] 保存通知方式配置失败: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "通知方式已生效但保存配置文件失败: " + err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "notify_mode": effective})
 }
 
 // ---- Restart Login (修改手机号) ----

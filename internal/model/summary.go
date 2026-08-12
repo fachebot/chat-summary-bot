@@ -98,3 +98,58 @@ func (m *SummaryModel) GetByDateAndChat(ctx context.Context, chatID int64, date 
 		Order(summary.BySummaryDate()).
 		All(ctx)
 }
+
+// SaveDailySummary 保存某群某日的每日群摘要（按 chat_id + 日期 upsert 一行，sender_id=0 表示群摘要）。
+func (m *SummaryModel) SaveDailySummary(ctx context.Context, chatID int64, date time.Time, content string) error {
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	existing, err := m.client.Query().
+		Where(
+			summary.ChatIDEQ(chatID),
+			summary.SummaryDateGTE(startOfDay),
+			summary.SummaryDateLT(endOfDay),
+		).
+		First(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return err
+	}
+	if existing != nil {
+		_, err = m.client.UpdateOneID(existing.ID).
+			SetContent(content).
+			SetSummaryDate(startOfDay).
+			Save(ctx)
+		return err
+	}
+	_, err = m.client.Create().
+		SetChatID(chatID).
+		SetSenderID(0).
+		SetSenderName("").
+		SetSummaryDate(startOfDay).
+		SetContent(content).
+		Save(ctx)
+	return err
+}
+
+// GetDailySummaryDates 返回某群有摘要的日期列表（按日期去重、升序）。
+func (m *SummaryModel) GetDailySummaryDates(ctx context.Context, chatID int64) ([]time.Time, error) {
+	items, err := m.client.Query().
+		Where(summary.ChatIDEQ(chatID)).
+		Select(summary.FieldSummaryDate).
+		Order(summary.BySummaryDate()).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	dates := make([]time.Time, 0, len(items))
+	for _, it := range items {
+		key := it.SummaryDate.Format("2006-01-02")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		dates = append(dates, it.SummaryDate)
+	}
+	return dates, nil
+}

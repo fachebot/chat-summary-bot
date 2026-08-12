@@ -4,12 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fachebot/chat-summary-bot/internal/lark"
 	"github.com/fachebot/chat-summary-bot/internal/logger"
 	"github.com/fachebot/chat-summary-bot/internal/market_indicators"
+	"github.com/fachebot/chat-summary-bot/internal/model"
 	"github.com/fachebot/chat-summary-bot/internal/svc"
 
 	"github.com/zelenin/go-tdlib/client"
@@ -37,6 +40,20 @@ type TeleApp struct {
 
 	connMu    sync.RWMutex
 	connState string
+
+	chatListMu    sync.Mutex
+	chatListCache groupChatsCacheEntry
+}
+
+// GroupChatInfo 群聊列表项。
+type GroupChatInfo struct {
+	ID    int64
+	Title string
+}
+
+type groupChatsCacheEntry struct {
+	chats     []GroupChatInfo
+	expiresAt time.Time
 }
 
 func NewApp(svcCtx *svc.ServiceContext, apiId int32, apiHash, dataDir string, marketIndicators *market_indicators.MarketIndicators) *TeleApp {
@@ -345,6 +362,85 @@ func (app *TeleApp) ConnectionState() string {
 	app.connMu.RLock()
 	defer app.connMu.RUnlock()
 	return app.connState
+}
+
+// SummaryModel 返回摘要数据模型（可能为 nil）。
+func (app *TeleApp) SummaryModel() *model.SummaryModel {
+	if app.svcCtx == nil {
+		return nil
+	}
+	return app.svcCtx.SummaryModel
+}
+
+// MessageModel 返回消息数据模型（可能为 nil）。
+func (app *TeleApp) MessageModel() *model.MessageModel {
+	if app.svcCtx == nil {
+		return nil
+	}
+	return app.svcCtx.MessageModel
+}
+
+// ListGroupChats 返回当前所有群聊（实时 TDLib 主列表 + 数据库有消息记录的群，合并去重，按标题排序）。
+// 结果带 30 秒 TTL 缓存，避免翻页时反复请求 TDLib。
+func (app *TeleApp) ListGroupChats() ([]GroupChatInfo, error) {
+	app.chatListMu.Lock()
+	if !app.chatListCache.expiresAt.IsZero() && time.Now().Before(app.chatListCache.expiresAt) {
+		chats := app.chatListCache.chats
+		app.chatListMu.Unlock()
+		return chats, nil
+	}
+	app.chatListMu.Unlock()
+
+	seen := make(map[int64]struct{})
+	chats := make([]GroupChatInfo, 0)
+
+	if app.tdClient != nil {
+		// 1. TDLib 实时主聊天列表
+		if res, err := app.tdClient.GetChats(&client.GetChatsRequest{Limit: 100}); err != nil {
+			logger.Warnf("[TeleApp] 获取实时群聊列表失败: %v", err)
+		} else {
+			for _, id := range res.ChatIds {
+				chat, err := app.getChat(id)
+				if err != nil || !isSupportedGroupChat(chat) {
+					continue
+				}
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				chats = append(chats, GroupChatInfo{ID: id, Title: chat.Title})
+			}
+		}
+
+		// 2. 数据库补充：有消息记录的群（避免实时列表前 100 之外被遗漏）
+		if mm := app.MessageModel(); mm != nil {
+			if ids, err := mm.GetAllChatIDs(context.Background()); err != nil {
+				logger.Warnf("[TeleApp] 获取数据库群聊列表失败: %v", err)
+			} else {
+				for _, id := range ids {
+					if _, ok := seen[id]; ok {
+						continue
+					}
+					chat, err := app.getChat(id)
+					if err != nil || !isSupportedGroupChat(chat) {
+						continue
+					}
+					seen[id] = struct{}{}
+					chats = append(chats, GroupChatInfo{ID: id, Title: chat.Title})
+				}
+			}
+		}
+	}
+
+	sort.Slice(chats, func(i, j int) bool {
+		return strings.ToLower(chats[i].Title) < strings.ToLower(chats[j].Title)
+	})
+
+	app.chatListMu.Lock()
+	app.chatListCache = groupChatsCacheEntry{chats: chats, expiresAt: time.Now().Add(30 * time.Second)}
+	app.chatListMu.Unlock()
+
+	return chats, nil
 }
 
 func (app *TeleApp) sendMessage(ctx context.Context, chatID int64, replyToMessageID int64, content string, parseMode ...client.TextParseMode) error {

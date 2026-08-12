@@ -25,6 +25,7 @@ type Scheduler struct {
 	notifier              *notify.Notifier
 	tdClient              *client.Client
 	messageModel          *model.MessageModel
+	summaryModel          *model.SummaryModel
 	taskModel             *model.TaskModel
 	dailyRunModel         *model.DailyRunModel
 	config                *config.Summary
@@ -43,6 +44,7 @@ func NewScheduler(
 	notifier *notify.Notifier,
 	tdClient *client.Client,
 	messageModel *model.MessageModel,
+	summaryModel *model.SummaryModel,
 	taskModel *model.TaskModel,
 	dailyRunModel *model.DailyRunModel,
 	cfg *config.Summary,
@@ -55,6 +57,7 @@ func NewScheduler(
 		notifier:              notifier,
 		tdClient:              tdClient,
 		messageModel:          messageModel,
+		summaryModel:          summaryModel,
 		taskModel:             taskModel,
 		dailyRunModel:         dailyRunModel,
 		config:                cfg,
@@ -496,6 +499,13 @@ func (s *Scheduler) processTask(ctx context.Context, chatID int64, startTime, en
 		return nil
 	}
 
+	// 持久化每日群摘要，供 Web 面板查看历史
+	if s.summaryModel != nil {
+		if err := s.summaryModel.SaveDailySummary(ctx, chatID, endTime, summary); err != nil {
+			logger.Warnf("[Scheduler] 保存群摘要失败 (chatID=%d): %v", chatID, err)
+		}
+	}
+
 	// 发送前持久化摘要：之后无论首次发送还是重试时崩溃，重启后都只重试发送，不会重新生成摘要
 	if taskID > 0 {
 		if err := s.taskModel.SetSummaryContent(ctx, taskID, summary); err != nil {
@@ -528,6 +538,13 @@ func (s *Scheduler) TriggerSummaryManual(ctx context.Context, chatID int64) erro
 	}
 	if summary == "" {
 		return nil
+	}
+
+	// 持久化手动摘要，供 Web 面板查看历史
+	if s.summaryModel != nil {
+		if err := s.summaryModel.SaveDailySummary(ctx, chatID, endTime, summary); err != nil {
+			logger.Warnf("[Scheduler] 保存手动摘要失败 (chatID=%d): %v", chatID, err)
+		}
 	}
 
 	return s.notifier.Notify(ctx, summary, chatID)

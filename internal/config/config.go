@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -357,6 +358,78 @@ func proxyBlock(proxy *Sock5Proxy) []string {
 		"  Password: " + yamlQuote(proxy.Password) + " # 代理密码（可选）",
 		"  Secret: " + yamlQuote(proxy.Secret) + " # MTProto 代理 secret（可选）",
 	}
+}
+
+// SaveChatNotifyModes 将按群聊通知方式写回配置文件，仅更新 Summary.ChatNotifyModes 子块，保留其余内容与注释。
+func SaveChatNotifyModes(filename string, modes map[int64]string) error {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	newline := "\n"
+	if strings.Contains(content, "\r\n") {
+		newline = "\r\n"
+	}
+
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+
+	block := notifyModesBlock(modes)
+
+	// 定位 "  ChatNotifyModes:" 行（Summary 下的子键，2 空格缩进）
+	startIdx := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "  ChatNotifyModes:") {
+			startIdx = i
+			break
+		}
+	}
+
+	var result string
+	if startIdx == -1 {
+		// 文件中没有 ChatNotifyModes 块，追加到末尾
+		joined := strings.Join(lines, newline)
+		if joined != "" && !strings.HasSuffix(joined, newline) {
+			joined += newline
+		}
+		result = joined + strings.Join(block, newline) + newline
+	} else {
+		// 删除旧块：紧随其后缩进大于等于 4 空格的行 + 空行
+		endIdx := startIdx + 1
+		for endIdx < len(lines) {
+			line := lines[endIdx]
+			if line == "" || strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
+				endIdx++
+				continue
+			}
+			break
+		}
+
+		newLines := append([]string{}, lines[:startIdx]...)
+		newLines = append(newLines, block...)
+		newLines = append(newLines, lines[endIdx:]...)
+		result = strings.Join(newLines, newline)
+		if !strings.HasSuffix(result, newline) {
+			result += newline
+		}
+	}
+
+	return os.WriteFile(filename, []byte(result), 0644)
+}
+
+// notifyModesBlock 生成 ChatNotifyModes 配置子块（Summary 下 2 空格缩进，条目 4 空格缩进）。
+func notifyModesBlock(modes map[int64]string) []string {
+	block := []string{"  ChatNotifyModes: # 按群聊单独覆盖通知方式，key=群聊ID，value=private/group/both"}
+	ids := make([]int64, 0, len(modes))
+	for id := range modes {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		block = append(block, fmt.Sprintf("    %d: %s", id, modes[id]))
+	}
+	return block
 }
 
 // yamlQuote 将字符串包装为 YAML 双引号标量。

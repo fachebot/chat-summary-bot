@@ -139,6 +139,7 @@ func startBotServices(svcCtx *svc.ServiceContext, app *teleapp.TeleApp, c *confi
 		notifierInstance,
 		app.Client(),
 		svcCtx.MessageModel,
+		svcCtx.SummaryModel,
 		svcCtx.TaskModel,
 		svcCtx.DailyRunModel,
 		&c.Summary,

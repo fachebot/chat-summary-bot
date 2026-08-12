@@ -504,3 +504,109 @@ func TestHandleAuthPhoneRestart(t *testing.T) {
 		t.Errorf("expected no restart when state is WaitPhoneNumber")
 	}
 }
+
+func TestPageRange(t *testing.T) {
+	cases := []struct {
+		total, page, pageSize int
+		wantStart, wantEnd    int
+	}{
+		{100, 1, 20, 0, 20},
+		{100, 5, 20, 80, 100},
+		{100, 6, 20, 100, 100},
+		{25, 2, 20, 20, 25},
+		{0, 1, 20, 0, 0},
+		{10, 0, 20, 0, 10},
+		{10, 1, 0, 0, 10},
+	}
+	for _, c := range cases {
+		start, end := pageRange(c.total, c.page, c.pageSize)
+		if start != c.wantStart || end != c.wantEnd {
+			t.Errorf("pageRange(%d,%d,%d) = (%d,%d), want (%d,%d)", c.total, c.page, c.pageSize, start, end, c.wantStart, c.wantEnd)
+		}
+	}
+}
+
+func TestHandleChatNotifyModeValidation(t *testing.T) {
+	s := &Server{appCfg: &config.Config{}}
+
+	// 非法 mode
+	req := httptest.NewRequest("POST", "/api/chats/1001/notify-mode", bytes.NewBufferString(`{"mode":"bad"}`))
+	req.SetPathValue("id", "1001")
+	rec := httptest.NewRecorder()
+	s.handleChatNotifyMode(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad mode, got %d", rec.Code)
+	}
+
+	// 非法 chat id
+	req = httptest.NewRequest("POST", "/api/chats/abc/notify-mode", bytes.NewBufferString(`{"mode":"group"}`))
+	req.SetPathValue("id", "abc")
+	rec = httptest.NewRecorder()
+	s.handleChatNotifyMode(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad chat id, got %d", rec.Code)
+	}
+
+	// 合法 mode，无 configFile（跳过持久化）
+	req = httptest.NewRequest("POST", "/api/chats/1001/notify-mode", bytes.NewBufferString(`{"mode":"group"}`))
+	req.SetPathValue("id", "1001")
+	rec = httptest.NewRecorder()
+	s.handleChatNotifyMode(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if s.appCfg.Summary.ChatNotifyModes[1001] != "group" {
+		t.Errorf("in-memory mode not updated")
+	}
+	var resp struct {
+		NotifyMode string `json:"notify_mode"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.NotifyMode != "group" {
+		t.Errorf("notify_mode = %q, want group", resp.NotifyMode)
+	}
+
+	// 清除覆盖（mode 为空）
+	req = httptest.NewRequest("POST", "/api/chats/1001/notify-mode", bytes.NewBufferString(`{"mode":""}`))
+	req.SetPathValue("id", "1001")
+	rec = httptest.NewRecorder()
+	s.handleChatNotifyMode(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if _, ok := s.appCfg.Summary.ChatNotifyModes[1001]; ok {
+		t.Errorf("override should be removed")
+	}
+}
+
+func TestHandleChatNotifyModePersists(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(f, []byte("Summary:\n  Cron: x\n  ChatNotifyModes:\n    -100: group\n  RetryTimes: 3\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{appCfg: &config.Config{Summary: config.Summary{ChatNotifyModes: map[int64]string{}}}, configFile: f}
+
+	req := httptest.NewRequest("POST", "/api/chats/42/notify-mode", bytes.NewBufferString(`{"mode":"both"}`))
+	req.SetPathValue("id", "42")
+	rec := httptest.NewRecorder()
+	s.handleChatNotifyMode(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	data, _ := os.ReadFile(f)
+	out := string(data)
+	if !strings.Contains(out, "    42: both") {
+		t.Errorf("notify mode not persisted: %s", out)
+	}
+	if strings.Contains(out, "-100: group") {
+		t.Errorf("old entry not replaced")
+	}
+	if !strings.Contains(out, "RetryTimes: 3") {
+		t.Errorf("sibling content lost")
+	}
+}

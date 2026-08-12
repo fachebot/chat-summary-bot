@@ -80,6 +80,13 @@
             <p>获取中...</p>
           </div>
         </div>
+        <div class="card">
+          <h2>群聊列表</h2>
+          <div id="chats-list">
+            <p>加载中...</p>
+          </div>
+          <div id="chats-pagination"></div>
+        </div>
       </div>
       <div id="tab-config" class="tab-content hidden">
         <div class="card">
@@ -459,7 +466,7 @@ function showTab(name, evt) {
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('tab-' + name).classList.remove('hidden');
   if (evt && evt.target) evt.target.classList.add('active');
-  if (name === 'overview') { loadDashboard(); startConnPoll(); }
+  if (name === 'overview') { loadDashboard(); loadChats(chatPage || 1); startConnPoll(); }
   if (name === 'config') { loadConfig(); stopConnPoll(); }
   if (name === 'proxy') { loadProxy('dashboard-proxy'); loadProxyStatus('proxy-status'); stopConnPoll(); }
 }
@@ -676,6 +683,151 @@ async function loadProxyStatus(containerId) {
 
 function refreshProxyStatus() {
   loadProxyStatus('proxy-status');
+}
+
+// ---- Group chats ----
+
+let chatPage = 1;
+const CHAT_PAGE_SIZE = 20;
+const NOTIFY_LABELS = {private: '私信', group: '群内', both: '两者'};
+
+function escapeHTML(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+function notifyLabel(mode) {
+  return NOTIFY_LABELS[mode] || (mode || '跟随全局');
+}
+
+async function loadChats(page) {
+  chatPage = page || 1;
+  const el = $('chats-list');
+  if (!el) return;
+  el.innerHTML = '<p>加载中...</p>';
+  try {
+    const res = await apiFetch('/api/chats?page=' + chatPage + '&page_size=' + CHAT_PAGE_SIZE);
+    if (res.status === 401) return;
+    const data = await res.json();
+    renderChats(data);
+  } catch (e) {
+    el.innerHTML = '<p class="error">获取群聊列表失败</p>';
+  }
+}
+
+function renderChats(data) {
+  const el = $('chats-list');
+  const chats = data.chats || [];
+  if (!chats.length) {
+    el.innerHTML = '<p>暂无群聊</p>';
+  } else {
+    el.innerHTML = '<div class="chat-grid">' + chats.map(chatCardHTML).join('') + '</div>';
+  }
+
+  const totalPages = Math.max(1, Math.ceil((data.total || 0) / (data.page_size || CHAT_PAGE_SIZE)));
+  $('chats-pagination').innerHTML =
+    `<span>第 ${data.page}/${totalPages} 页，共 ${data.total} 个群</span>
+     <button onclick="loadChats(${data.page - 1})" ${data.page <= 1 ? 'disabled' : ''}>上一页</button>
+     <button onclick="loadChats(${data.page + 1})" ${data.page >= totalPages ? 'disabled' : ''}>下一页</button>`;
+}
+
+function chatCardHTML(c) {
+  return `
+    <div class="chat-card" data-id="${c.id}" data-notify="${escapeHTML(c.notify_mode || '')}">
+      <div class="chat-card-title">${escapeHTML(c.title) || '(无标题)'}</div>
+      <div class="chat-card-meta">ID: ${c.id}</div>
+      <div class="chat-card-meta">通知方式：<span class="chat-notify-label">${notifyLabel(c.notify_mode)}</span></div>
+      <div class="chat-card-actions">
+        <button class="link-btn" onclick="toggleChatSummary('${c.id}')">查看摘要</button>
+        <button class="link-btn" onclick="toggleChatNotify('${c.id}')">设置通知</button>
+      </div>
+      <div id="chat-summary-${c.id}" class="chat-panel hidden"></div>
+      <div id="chat-notify-${c.id}" class="chat-panel hidden"></div>
+    </div>`;
+}
+
+function toggleChatSummary(id) {
+  const panel = $('chat-summary-' + id);
+  if (!panel) return;
+  if (!panel.classList.contains('hidden')) { hide('chat-summary-' + id); return; }
+  hide('chat-notify-' + id);
+  panel.innerHTML = `
+    <label>日期</label>
+    <input type="date" id="chat-summary-date-${id}">
+    <button onclick="queryChatSummary('${id}')">查询</button>
+    <div id="chat-summary-result-${id}"></div>`;
+  show('chat-summary-' + id);
+  $('chat-summary-date-' + id).value = new Date().toISOString().slice(0, 10);
+  queryChatSummary(id);
+}
+
+async function queryChatSummary(id) {
+  const date = $('chat-summary-date-' + id).value;
+  const result = $('chat-summary-result-' + id);
+  if (!date) return;
+  result.innerHTML = '<p>加载中...</p>';
+  try {
+    const res = await apiFetch('/api/chats/' + id + '/summaries?date=' + date);
+    if (res.status === 401) return;
+    const data = await res.json();
+    if (data.items && data.items.length) {
+      result.innerHTML = data.items.map(it => `<pre class="chat-summary-content">${escapeHTML(it.content)}</pre>`).join('');
+    } else {
+      result.innerHTML = '<p>该日期暂无摘要</p>';
+    }
+  } catch (e) {
+    result.innerHTML = '<p class="error">获取摘要失败</p>';
+  }
+}
+
+function toggleChatNotify(id) {
+  const panel = $('chat-notify-' + id);
+  if (!panel) return;
+  if (!panel.classList.contains('hidden')) { hide('chat-notify-' + id); return; }
+  hide('chat-summary-' + id);
+  const card = document.querySelector('.chat-card[data-id="' + id + '"]');
+  const current = card ? (card.getAttribute('data-notify') || '') : '';
+  panel.innerHTML = `
+    <label>通知方式</label>
+    <select id="chat-notify-select-${id}">
+      <option value="">跟随全局</option>
+      <option value="private">私信</option>
+      <option value="group">群内</option>
+      <option value="both">两者</option>
+    </select>
+    <button onclick="saveChatNotify('${id}')">保存</button>
+    <div id="chat-notify-msg-${id}" class="proxy-msg"></div>`;
+  show('chat-notify-' + id);
+  $('chat-notify-select-' + id).value = current;
+}
+
+async function saveChatNotify(id) {
+  const mode = $('chat-notify-select-' + id).value;
+  const msg = $('chat-notify-msg-' + id);
+  try {
+    const res = await apiFetch('/api/chats/' + id + '/notify-mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode: mode})
+    });
+    if (res.status === 401) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      msg.textContent = data.error || '保存失败';
+      msg.className = 'proxy-msg error';
+      return;
+    }
+    msg.textContent = '已保存';
+    msg.className = 'proxy-msg success';
+    const card = document.querySelector('.chat-card[data-id="' + id + '"]');
+    if (card) {
+      card.setAttribute('data-notify', data.notify_mode || '');
+      const label = card.querySelector('.chat-notify-label');
+      if (label) label.textContent = notifyLabel(data.notify_mode);
+    }
+  } catch (e) {
+    msg.textContent = '网络错误，请重试';
+    msg.className = 'proxy-msg error';
+  }
 }
 
 // Init
