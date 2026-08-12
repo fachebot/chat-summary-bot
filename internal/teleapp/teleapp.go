@@ -43,6 +43,9 @@ type TeleApp struct {
 
 	chatListMu    sync.Mutex
 	chatListCache groupChatsCacheEntry
+
+	hintMu    sync.Mutex
+	hintTimes map[int64]time.Time
 }
 
 // GroupChatInfo 群聊列表项。
@@ -441,6 +444,41 @@ func (app *TeleApp) ListGroupChats() ([]GroupChatInfo, error) {
 	app.chatListMu.Unlock()
 
 	return chats, nil
+}
+
+// isReplyToOwnMessage 判断该消息是否回复了我们自己发送的消息。
+func (app *TeleApp) isReplyToOwnMessage(message *client.Message) bool {
+	replyTo, ok := message.ReplyTo.(*client.MessageReplyToMessage)
+	if !ok || replyTo == nil || replyTo.MessageId == 0 {
+		return false
+	}
+	chatID := replyTo.ChatId
+	if chatID == 0 {
+		chatID = message.ChatId
+	}
+	replied, err := app.tdClient.GetMessage(&client.GetMessageRequest{ChatId: chatID, MessageId: replyTo.MessageId})
+	if err != nil {
+		return false
+	}
+	sender, ok := replied.SenderId.(*client.MessageSenderUser)
+	return ok && sender.UserId == app.user.Id
+}
+
+// hintInterval 同一聊天内提示语的最小间隔。
+const hintInterval = 30 * time.Second
+
+// maybeHint 对同一聊天做提示限频，返回是否允许发送提示。
+func (app *TeleApp) maybeHint(chatID int64) bool {
+	app.hintMu.Lock()
+	defer app.hintMu.Unlock()
+	if app.hintTimes == nil {
+		app.hintTimes = make(map[int64]time.Time)
+	}
+	if last := app.hintTimes[chatID]; time.Since(last) < hintInterval {
+		return false
+	}
+	app.hintTimes[chatID] = time.Now()
+	return true
 }
 
 func (app *TeleApp) sendMessage(ctx context.Context, chatID int64, replyToMessageID int64, content string, parseMode ...client.TextParseMode) error {

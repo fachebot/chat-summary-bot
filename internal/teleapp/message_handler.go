@@ -49,7 +49,9 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 		app.forwardIfMonitored(ctx, chat, message, senderID, senderName, senderUsername)
 	}
 
-	if senderID == app.user.Id {
+	// 只跳过本客户端自己发出的消息（IsOutgoing=true，如自动回复/摘要），
+	// 同账号其它设备发来的入站消息（IsOutgoing=false）正常处理，否则无法用 bot 自身账号测试命令。
+	if senderID == app.user.Id && message.IsOutgoing {
 		if isGroupChat {
 			if _, err := app.saveGroupTextMessage(ctx, message, true); err != nil {
 				logger.Errorf("[TeleApp] 保存消息失败, %v", err)
@@ -256,13 +258,18 @@ func (app *TeleApp) handleIncomingMessage(ctx context.Context, message *client.M
 		}
 	}
 
-	// 未识别的消息：私聊每次都提示；群聊需明确 @ 才提示
+	// 未识别的消息：私聊每次都提示；群聊需明确 @ 才提示。
+	// 回复我们自己的消息不接话（避免 bot 互聊死循环）；同一聊 30 秒内限频一次。
 	if !shouldRespond && !isSummaryCommand && !isGetUserIDCommand && !isHiCommand &&
-		!isDeleteCommand && !isStartCommand && !isHelpCommand {
+		!isDeleteCommand && !isStartCommand && !isHelpCommand && !app.isReplyToOwnMessage(message) {
 		if !isGroupChat {
-			_ = app.sendMessage(ctx, message.ChatId, message.Id, "👋 你好！发送 /start 查看介绍，发送 /help 查看可用命令。")
+			if app.maybeHint(message.ChatId) {
+				_ = app.sendMessage(ctx, message.ChatId, message.Id, "👋 你好！发送 /start 查看介绍，发送 /help 查看可用命令。")
+			}
 		} else if hasMention {
-			_ = app.sendMessage(ctx, message.ChatId, message.Id, "🤔 你好！在群里 @我 发送 /help 查看可用命令。")
+			if app.maybeHint(message.ChatId) {
+				_ = app.sendMessage(ctx, message.ChatId, message.Id, "🤔 你好！在群里 @我 发送 /help 查看可用命令。")
+			}
 		}
 	}
 
